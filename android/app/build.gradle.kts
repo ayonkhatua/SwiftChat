@@ -2,17 +2,18 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
-    // 🟢 1. Google Services Plugin Added
     id("com.google.gms.google-services")
 }
 
 android {
-    // 🟢 2. Package Name Updated
     namespace = "com.hyper.swiftchat"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // 🟢 FIX 1: Desugaring ON kiya (Notifications ke liye zaroori)
+        isCoreLibraryDesugaringEnabled = true
+
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -22,16 +23,11 @@ android {
     }
 
     defaultConfig {
-        // 🟢 3. Application ID Updated
         applicationId = "com.hyper.swiftchat"
-        
-        // 🟢 4. Min SDK 23 set kiya (Firebase requirement)
         minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        // 🟢 5. MultiDex ON kiya
         multiDexEnabled = true
     }
 
@@ -46,7 +42,9 @@ flutter {
     source = "../.."
 }
 
-// 🟢 6. MultiDex Library Added
 dependencies {
+    // 🟢 FIX 2: Desugar Library Add ki
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+
     implementation("androidx.multidex:multidex:2.0.1")
 }
