@@ -30,7 +30,7 @@ jobs:
 
     # 4. Build APK (Release Mode)
     - name: Build APK
-      run: flutter build apk --release
+      run: flutter build apk --debug
 
     # 5. Upload APK to GitHub (Taaki tum download kar sako)
     - name: Upload APK
