@@ -11,7 +11,7 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        // 🟢 FIX 1: Desugaring ON kiya (Notifications ke liye zaroori)
+        // Desugaring ON (Notifications ke liye)
         isCoreLibraryDesugaringEnabled = true
 
         sourceCompatibility = JavaVersion.VERSION_17
@@ -43,8 +43,8 @@ flutter {
 }
 
 dependencies {
-    // 🟢 FIX 2: Desugar Library Add ki
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    // 🟢 UPDATE: Version 2.1.4 kar diya (Build Error Fix)
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 
     implementation("androidx.multidex:multidex:2.0.1")
 }
