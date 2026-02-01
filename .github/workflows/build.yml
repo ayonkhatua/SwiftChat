@@ -1,0 +1,40 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # 1. Java 17 Setup (Zaroori hai kyunki humne Gradle mein Java 17 dala tha)
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    # 2. Flutter Setup
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.19.0' # Ya jo version tum use kar rahe ho
+
+    # 3. Dependencies Download
+    - name: Get Dependencies
+      run: flutter pub get
+
+    # 4. Build APK (Release Mode)
+    - name: Build APK
+      run: flutter build apk --release
+
+    # 5. Upload APK to GitHub (Taaki tum download kar sako)
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: swift-chat-apk
+        path: build/app/outputs/flutter-apk/app-release.apk
