@@ -1,19 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'firebase_options.dart'; 
-import 'screens/splash_screen.dart'; // 🟢 1. Splash Screen Import kiya
+// import 'firebase_options.dart';  <-- 🔴 1. IS LINE KO HATA DO (Ya comment kar do)
+import 'screens/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Firebase Initialize karna
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  // 🟢 2. CHANGE: 'options' hata diya. Ab ye google-services.json use karega.
+  await Firebase.initializeApp(); 
 
-  // 🚀 OFFLINE PERSISTENCE (Speed Booster) - ✅ JAISA AAPNE KAHA, ISKO RAKHA HAI
-  // Ye data ko phone me cache karta hai taaki app offline bhi chale aur fast load ho.
+  // Offline Persistence
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
@@ -31,13 +28,11 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Swift Chat',
       theme: ThemeData(
-        brightness: Brightness.dark, // Dark Theme
+        brightness: Brightness.dark,
         primarySwatch: Colors.purple,
-        scaffoldBackgroundColor: Colors.black, // Pitch Black Background
+        scaffoldBackgroundColor: Colors.black,
         useMaterial3: true,
       ),
-      // 🟢 2. Home ko change karke SPLASH SCREEN kar diya
-      // Ab pehle Logo aayega, fir wahan check hoga ki Login hai ya nahi
       home: const SplashScreen(), 
     );
   }
