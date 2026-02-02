@@ -10,6 +10,15 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     compileOptions {
         // Desugaring ON (Notifications ke liye)
         isCoreLibraryDesugaringEnabled = true
@@ -33,7 +42,8 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            // Signing config ko 'debug' kar do taaki release build bhi chal jaye
+            signingConfig signingConfigs.debug 
         }
     }
 }
