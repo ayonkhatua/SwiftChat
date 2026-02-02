@@ -1,85 +1,67 @@
-import 'dart:math';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'database_service.dart';
 
-// ⚠️ TOP-LEVEL FUNCTION
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  print("🌙 Background Notification: ${message.notification?.title}");
-}
-
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
-  final DatabaseService _dbService = DatabaseService();
 
-  // 1. Initialize Everything
   Future<void> initNotifications() async {
-    // A. Permission
+    // 1. Permission Request
     await _firebaseMessaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
     );
 
-    // B. Token
-    final fcmToken = await _firebaseMessaging.getToken();
-    if (fcmToken != null) {
-      print("🔔 FCM Token: $fcmToken");
-      await _dbService.saveUserToken(fcmToken);
+    // 2. Token Save
+    String? token = await _firebaseMessaging.getToken();
+    if (token != null) {
+      print("🔔 Device Token: $token");
+      DatabaseService().saveUserToken(token);
     }
 
-    // C. Setup Local Notifications
+    _firebaseMessaging.onTokenRefresh.listen((newToken) {
+      DatabaseService().saveUserToken(newToken);
+    });
+
+    // 3. Local Notifications Init
     const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     
     const InitializationSettings initSettings = InitializationSettings(
-      android: androidSettings, 
-      iOS: null 
+      android: androidSettings,
     );
 
-    // 🔴 FIX 1: Yahan 'settings' likhna zaroori tha
+    // 🟢 ERROR FIX: Tumhara version 'settings' parameter maang raha hai
     await _localNotifications.initialize(
-      settings: initSettings, // ✅ Added 'settings:' based on your error
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        print("🔔 User tapped on notification: ${response.payload}");
+      settings: initSettings, // Yahan change kiya hai
+      onDidReceiveNotificationResponse: (details) {
+        // Handle tap
       },
     );
 
-    // D. Background Handler
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-    // E. Foreground Handler
+    // 4. Foreground Message Handler
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print("☀️ Foreground Notification: ${message.notification?.title}");
-      if (message.notification != null) {
-        _showLocalNotification(message);
+      RemoteNotification? notification = message.notification;
+      AndroidNotification? android = message.notification?.android;
+
+      if (notification != null && android != null) {
+        // 🟢 ERROR FIX: Named parameters (id, title, body) add kiye hain
+        _localNotifications.show(
+          id: notification.hashCode,
+          title: notification.title,
+          body: notification.body,
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'high_importance_channel',
+              'High Importance Notifications',
+              importance: Importance.max,
+              priority: Priority.high,
+              icon: '@mipmap/ic_launcher',
+            ),
+          ),
+        );
       }
     });
-  }
-
-  // 2. Show Local Notification
-  Future<void> _showLocalNotification(RemoteMessage message) async {
-    const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'high_importance_channel', 
-      'High Importance Notifications',
-      channelDescription: 'This channel is used for important notifications.',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-    );
-
-    const NotificationDetails platformDetails = NotificationDetails(android: androidDetails);
-
-    int notificationId = Random().nextInt(100000); 
-
-    // 🔴 FIX 2: Yahan saare parameters ka naam likhna zaroori hai
-    await _localNotifications.show(
-      id: notificationId,                 // ✅ id: added
-      title: message.notification?.title, // ✅ title: added
-      body: message.notification?.body,   // ✅ body: added
-      notificationDetails: platformDetails, // ✅ notificationDetails: added
-      payload: message.data.toString(),
-    );
   }
 }
