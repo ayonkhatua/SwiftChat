@@ -6,6 +6,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:googleapis_auth/auth_io.dart'; // 🟢 Added for V1 Token
+import 'package:flutter/services.dart'; // 🟢 Added for Asset Reading
 import '../models/message_model.dart';
 
 class DatabaseService {
@@ -88,20 +90,73 @@ class DatabaseService {
     }
   }
 
-  // Notification Logic
+  // ---------------------------------------------------
+  // 🔔 V1 NOTIFICATION LOGIC (NEW)
+  // ---------------------------------------------------
+  
+  // 1. Get Access Token from JSON
+  Future<String> getAccessToken() async {
+    final jsonString = await rootBundle.loadString('assets/service-account.json');
+    final accountCredentials = ServiceAccountCredentials.fromJson(jsonString);
+    final scopes = ['https://www.googleapis.com/auth/firebase.messaging'];
+    final authClient = await clientViaServiceAccount(accountCredentials, scopes);
+    return authClient.credentials.accessToken.data;
+  }
+
+  // 2. Send Notification using V1 API
   Future<void> sendPushNotification(String receiverId, String title, String msg) async {
     try {
+      // Receiver ka Token nikalo
       var userDoc = await _firestore.collection('users').doc(receiverId).get();
-      if (userDoc.exists && userDoc.data()!.containsKey('fcm_token')) {
-        // String token = userDoc['fcm_token']; // Uncomment when using
-        // HTTP Request code here...
+      if (!userDoc.exists || !userDoc.data()!.containsKey('fcm_token')) {
+        return; // Token nahi hai toh return
       }
+      String token = userDoc['fcm_token'];
+
+      // Access Token Generate karo
+      String accessToken = await getAccessToken();
+
+      // 🟢 Project ID (Tumhare screenshot se 'hyper-swift-chat')
+      String projectId = 'hyper-swift-chat'; 
+      final String endpoint = 'https://fcm.googleapis.com/v1/projects/$projectId/messages:send';
+
+      final Map<String, dynamic> message = {
+        'message': {
+          'token': token,
+          'notification': {
+            'title': title,
+            'body': msg,
+          },
+          'data': {
+            'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+            'id': '1',
+            'status': 'done',
+            'type': 'chat'
+          },
+          'android': {
+            'priority': 'high',
+            'notification': {
+                'channel_id': 'high_importance_channel'
+            }
+          }
+        }
+      };
+
+      await http.post(
+        Uri.parse(endpoint),
+        headers: <String, String>{
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
+        },
+        body: jsonEncode(message),
+      );
+      
     } catch (e) {
       print("Notification Error: $e");
     }
   }
 
-  // Get Messages (Fixed Logic)
+  // Get Messages
   Stream<List<Message>> getMessages(String receiverId, {bool isGroup = false}) {
     String currentUserId = _auth.currentUser!.uid;
     String chatId;
