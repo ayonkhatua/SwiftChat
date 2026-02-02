@@ -10,12 +10,13 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
+    // 🟢 FIX: Ab ye Kotlin style mein hai (Error nahi aayega)
     signingConfigs {
-        debug {
-            storeFile file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
+        create("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 
@@ -42,8 +43,8 @@ android {
 
     buildTypes {
         release {
-            // Signing config ko 'debug' kar do taaki release build bhi chal jaye
-            signingConfig signingConfigs.debug 
+            // 🟢 FIX: Sahi tarika Kotlin mein reference dene ka
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 }
@@ -53,7 +54,7 @@ flutter {
 }
 
 dependencies {
-    // 🟢 UPDATE: Version 2.1.4 kar diya (Build Error Fix)
+    // Version 2.1.4 (Build Error Fix)
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 
     implementation("androidx.multidex:multidex:2.0.1")
