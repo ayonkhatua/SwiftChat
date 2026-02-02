@@ -10,9 +10,9 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
-    // 🟢 FIX: Ab ye Kotlin style mein hai (Error nahi aayega)
+    // 🟢 FIX: 'create' ki jagah 'getByName' use kiya (Kyunki debug pehle se hota hai)
     signingConfigs {
-        create("debug") {
+        getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
@@ -21,9 +21,7 @@ android {
     }
 
     compileOptions {
-        // Desugaring ON (Notifications ke liye)
         isCoreLibraryDesugaringEnabled = true
-
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -43,7 +41,6 @@ android {
 
     buildTypes {
         release {
-            // 🟢 FIX: Sahi tarika Kotlin mein reference dene ka
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -54,8 +51,6 @@ flutter {
 }
 
 dependencies {
-    // Version 2.1.4 (Build Error Fix)
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-
     implementation("androidx.multidex:multidex:2.0.1")
 }
