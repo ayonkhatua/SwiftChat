@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class Message {
-  final String messageId; // 🟢 NEW FIELD ADDED
+  final String messageId; 
   final String senderId;
   final String? senderName;
   final String receiverId;
@@ -10,6 +10,8 @@ class Message {
   final Timestamp timestamp;
   final List deletedBy;
   final bool isRead;
+  final Map<String, dynamic> reactions; // 🟢 Added for Telegram Style Reactions
+  final Map<String, dynamic>? replyTo;  // 🟢 Added for Reply Feature
 
   Message({
     required this.messageId,
@@ -21,6 +23,8 @@ class Message {
     required this.timestamp,
     required this.deletedBy,
     required this.isRead,
+    this.reactions = const {}, // Default empty map
+    this.replyTo,
   });
 
   // Factory to convert Firestore Document -> Message Object
@@ -28,7 +32,7 @@ class Message {
     Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
     
     return Message(
-      messageId: doc.id, // 🟢 FIX: Document ki ID ko 'messageId' mein daal diya
+      messageId: doc.id, 
       senderId: data['senderId'] ?? "",
       senderName: data['senderName'] ?? "Unknown",
       receiverId: data['receiverId'] ?? "",
@@ -37,6 +41,8 @@ class Message {
       timestamp: data['timestamp'] ?? Timestamp.now(),
       deletedBy: data['deletedBy'] ?? [],
       isRead: data['isRead'] ?? false,
+      reactions: data['reactions'] ?? {}, // Firestore se reactions uthao
+      replyTo: data['replyTo'], // Firestore se reply data uthao
     );
   }
 }

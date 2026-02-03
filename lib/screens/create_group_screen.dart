@@ -15,7 +15,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final TextEditingController _nameController = TextEditingController();
   final DatabaseService _dbService = DatabaseService();
   
-  List<String> _selectedUserIds = [];
+  final List<String> _selectedUserIds = [];
   XFile? _groupIcon;
   bool _isLoading = false;
 

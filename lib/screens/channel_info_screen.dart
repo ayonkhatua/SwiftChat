@@ -122,7 +122,7 @@ class _ChannelInfoScreenState extends State<ChannelInfoScreen> {
                           border: Border.all(color: Colors.purpleAccent.withOpacity(0.3))
                         ),
                         child: SwitchListTile(
-                          activeColor: Colors.purpleAccent,
+                          activeThumbColor: Colors.purpleAccent,
                           title: const Text("Hide Members List", style: TextStyle(color: Colors.white)),
                           subtitle: Text(
                             memberCount > 5000 ? "Unlocked (Big Channel)" : "Requires Premium or 5k+ members",

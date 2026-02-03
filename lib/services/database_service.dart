@@ -31,7 +31,6 @@ class DatabaseService {
       bool isConnected = event.snapshot.value as bool? ?? false;
       
       // 👻 GHOST CHECK: Kya user ne Online Status chupaya hai?
-      // Hum har baar Firestore se check karenge taaki setting change hote hi asar dikhe
       var doc = await _firestore.collection('users').doc(uid).get();
       bool isGhostOnline = false;
       
@@ -63,26 +62,58 @@ class DatabaseService {
     return _rtdb.ref('/status/$uid').onValue;
   }
 
-  // ---------------------------------------------------
-  // 👻 GHOST SETTINGS HELPER (NEW)
-  // ---------------------------------------------------
+  // 👻 GHOST SETTINGS HELPER
   Future<void> updateGhostSettings(String key, bool value) async {
     String uid = _auth.currentUser!.uid;
     await _firestore.collection('users').doc(uid).update({key: value});
-    
-    // Agar Online setting change hui hai, toh Presence system refresh karo
     if (key == 'ghost_hide_online') {
       setupPresenceSystem(); 
     }
   }
 
   // ---------------------------------------------------
-  // 💬 2. MESSAGING SYSTEM
+  // 💰 2. WALLET & COIN SYSTEM (NEW)
   // ---------------------------------------------------
 
-  Future<void> sendMessage(String receiverId, String text, String receiverName, {bool isGroup = false}) async {
+  // Wallet Balance Stream
+  Stream<DocumentSnapshot> getUserWallet() {
+    return _firestore.collection('users').doc(_auth.currentUser!.uid).snapshots();
+  }
+
+  // Coins Update (Add/Subtract)
+  Future<void> updateSwiftCoins(String uid, int amount) async {
+    await _firestore.collection('users').doc(uid).update({
+      'swiftCoins': FieldValue.increment(amount)
+    });
+  }
+
+  // ---------------------------------------------------
+  // 🏆 3. PREMIUM LIMITS CHECKER (NEW)
+  // ---------------------------------------------------
+  
+  Future<Map<String, dynamic>> getUserLimits() async {
+    String uid = _auth.currentUser!.uid;
+    var doc = await _firestore.collection('users').doc(uid).get();
+    
+    bool isPremium = doc.data()?['isPremium'] ?? false;
+    String plan = doc.data()?['planType'] ?? "Free"; // 'Super-Premium' or 'Premium'
+
+    if (plan == "Super-Premium") {
+      return {"pinLimit": 100, "bioLimit": 500, "msgLimit": 2000, "isGhost": true};
+    } else if (isPremium) {
+      return {"pinLimit": 20, "bioLimit": 100, "msgLimit": 1000, "isGhost": false};
+    } else {
+      return {"pinLimit": 5, "bioLimit": 50, "msgLimit": 500, "isGhost": false};
+    }
+  }
+
+  // ---------------------------------------------------
+  // 💬 4. MESSAGING SYSTEM
+  // ---------------------------------------------------
+
+  Future<void> sendMessage(String receiverId, String text, String receiverName, {bool isGroup = false, Map<String, dynamic>? replyTo}) async {
     String currentUserId = _auth.currentUser!.uid;
-    String currentUserName = _auth.currentUser!.displayName ?? _auth.currentUser!.email!.split('@')[0]; 
+    String currentUserName = _auth.currentUser!.displayName ?? "User"; 
     
     String chatId;
     if (isGroup) {
@@ -102,6 +133,8 @@ class DatabaseService {
       'timestamp': FieldValue.serverTimestamp(),
       'deletedBy': [],
       'isRead': false,
+      'reactions': {}, // Default empty
+      'replyTo': replyTo, // 🟢 Reply Data Support
     });
 
     await _firestore.collection('chats').doc(chatId).set({
@@ -119,8 +152,29 @@ class DatabaseService {
     }
   }
 
+  // ❤️ REACTION HELPER
+  Future<void> toggleReaction(String chatId, String messageId, String emoji) async {
+    String currentUserId = _auth.currentUser!.uid;
+    DocumentReference msgRef = _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId);
+
+    await _firestore.runTransaction((transaction) async {
+      DocumentSnapshot snapshot = await transaction.get(msgRef);
+      if (!snapshot.exists) return;
+
+      Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+      Map<String, dynamic> reactions = data['reactions'] != null ? Map<String, dynamic>.from(data['reactions']) : {};
+
+      if (reactions[currentUserId] == emoji) {
+        reactions.remove(currentUserId);
+      } else {
+        reactions[currentUserId] = emoji;
+      }
+      transaction.update(msgRef, {'reactions': reactions});
+    });
+  }
+
   // ---------------------------------------------------
-  // 🔔 V1 NOTIFICATION LOGIC
+  // 🔔 5. NOTIFICATION LOGIC
   // ---------------------------------------------------
   
   Future<String> getAccessToken() async {
@@ -204,7 +258,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 💎 PREMIUM SYSTEM (NEW)
+  // 💎 6. PREMIUM STATUS
   // ---------------------------------------------------
   
   Future<bool> isUserPremium() async {
@@ -216,13 +270,8 @@ class DatabaseService {
     return false; // Default FREE user
   }
 
-  Future<void> setPremiumStatus(bool status) async {
-    String uid = _auth.currentUser!.uid;
-    await _firestore.collection('users').doc(uid).set({'isPremium': status}, SetOptions(merge: true));
-  }
-
   // ---------------------------------------------------
-  // 🤝 3. FRIEND SYSTEM
+  // 🤝 7. FRIEND & SEARCH SYSTEM
   // ---------------------------------------------------
 
   Stream<QuerySnapshot> getRecentChats() {
@@ -293,7 +342,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // ✍️ 4. TYPING INDICATOR
+  // ✍️ 8. TYPING INDICATOR
   // ---------------------------------------------------
 
   Future<void> setTypingStatus(String receiverId, bool isTyping) async {
@@ -320,7 +369,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 📷 5. MEDIA SENDING (Image & Audio)
+  // 📷 9. MEDIA SENDING (Image & Audio)
   // ---------------------------------------------------
 
   Future<void> sendImageMessage(String receiverId, XFile imageFile, String receiverName, {bool isGroup = false}) async {
@@ -355,6 +404,7 @@ class DatabaseService {
         'timestamp': FieldValue.serverTimestamp(),
         'deletedBy': [],
         'isRead': false,
+        'reactions': {},
       });
 
       await _firestore.collection('chats').doc(chatId).set({
@@ -369,7 +419,7 @@ class DatabaseService {
     }
   }
 
-  // 🎙️ VOICE NOTE SENDING LOGIC (ADDED)
+  // 🎙️ VOICE NOTE SENDING
   Future<void> sendAudioMessage(String receiverId, String filePath, String receiverName, {bool isGroup = false}) async {
     try {
       String currentUserId = _auth.currentUser!.uid;
@@ -384,7 +434,6 @@ class DatabaseService {
         chatId = ids.join("_");
       }
 
-      // 1. Upload Audio File
       String fileName = "${DateTime.now().millisecondsSinceEpoch}.m4a";
       Reference ref = _storage.ref().child('chat_audio/$chatId/$fileName');
       File audioFile = File(filePath);
@@ -392,7 +441,6 @@ class DatabaseService {
       TaskSnapshot snapshot = await uploadTask;
       String audioUrl = await snapshot.ref.getDownloadURL();
 
-      // 2. Save Message (Type: 'audio')
       await _firestore.collection('chats').doc(chatId).collection('messages').add({
         'senderId': currentUserId,
         'senderName': currentUserName,
@@ -405,7 +453,6 @@ class DatabaseService {
         'reactions': {},
       });
 
-      // 3. Update Last Message
       await _firestore.collection('chats').doc(chatId).set({
         'lastMessage': "🎤 Voice Message",
         'lastTime': FieldValue.serverTimestamp(),
@@ -418,7 +465,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 🗑️ 6. DELETION LOGIC
+  // 🗑️ 10. DELETION & READ RECEIPTS
   // ---------------------------------------------------
 
   Future<void> deleteForEveryone(String receiverId, String messageId) async {
@@ -450,8 +497,44 @@ class DatabaseService {
     });
   }
 
+  Future<void> markMessagesAsRead(String receiverId, {bool isGroup = false}) async {
+    String currentUserId = _auth.currentUser!.uid;
+
+    // 👻 GHOST CHECK: Kya user ne Blue Ticks chupaye hain?
+    var userDoc = await _firestore.collection('users').doc(currentUserId).get();
+    bool isGhostSeen = false;
+    if(userDoc.exists && userDoc.data() != null) {
+       isGhostSeen = userDoc.data()!['ghost_hide_seen'] ?? false;
+    }
+
+    if (isGhostSeen) return; // Ghost Mode ON hai, read mark mat karo
+
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else if (receiverId.contains('_')) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+
+    QuerySnapshot unreadMsgs = await _firestore.collection('chats').doc(chatId).collection('messages')
+        .where('receiverId', isEqualTo: currentUserId)
+        .where('isRead', isEqualTo: false).get();
+
+    if (unreadMsgs.docs.isEmpty) return;
+
+    WriteBatch batch = _firestore.batch();
+    for (var doc in unreadMsgs.docs) {
+      batch.update(doc.reference, {'isRead': true});
+    }
+    await batch.commit();
+  }
+
   // ---------------------------------------------------
-  // 🔔 7. USER & PROFILE
+  // 🔔 11. USER & PROFILE
   // ---------------------------------------------------
 
   Future<void> saveUserToken(String token) async {
@@ -487,45 +570,8 @@ class DatabaseService {
     return _firestore.collection('users').doc(_auth.currentUser!.uid).snapshots();
   }
 
-  Future<void> markMessagesAsRead(String receiverId, {bool isGroup = false}) async {
-    String currentUserId = _auth.currentUser!.uid;
-
-    // 👻 GHOST CHECK: Kya user ne Blue Ticks chupaye hain?
-    var userDoc = await _firestore.collection('users').doc(currentUserId).get();
-    bool isGhostSeen = false;
-    if(userDoc.exists && userDoc.data() != null) {
-       isGhostSeen = userDoc.data()!['ghost_hide_seen'] ?? false;
-    }
-
-    // Agar Ghost Seen ON hai, toh function yahin rok do. Read mark mat karo.
-    if (isGhostSeen) return; 
-
-    String chatId;
-    if (isGroup) {
-      chatId = receiverId;
-    } else if (receiverId.contains('_')) {
-      chatId = receiverId;
-    } else {
-      List<String> ids = [currentUserId, receiverId];
-      ids.sort();
-      chatId = ids.join("_");
-    }
-
-    QuerySnapshot unreadMsgs = await _firestore.collection('chats').doc(chatId).collection('messages')
-        .where('receiverId', isEqualTo: currentUserId)
-        .where('isRead', isEqualTo: false).get();
-
-    if (unreadMsgs.docs.isEmpty) return;
-
-    WriteBatch batch = _firestore.batch();
-    for (var doc in unreadMsgs.docs) {
-      batch.update(doc.reference, {'isRead': true});
-    }
-    await batch.commit();
-  }
-
   // ---------------------------------------------------
-  // 🚫 8. BLOCK SYSTEM
+  // 🚫 12. BLOCK SYSTEM
   // ---------------------------------------------------
 
   Future<void> blockUser(String userId) async {
@@ -549,7 +595,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 👥 9. GROUP SYSTEM
+  // 👥 13. GROUP SYSTEM
   // ---------------------------------------------------
 
   Stream<List<Map<String, dynamic>>> getMyFriends() {
@@ -615,7 +661,7 @@ class DatabaseService {
   }
   
   // ---------------------------------------------------
-  // 📢 10. CHANNEL SYSTEM
+  // 📢 14. CHANNEL SYSTEM
   // ---------------------------------------------------
 
   Future<void> createChannel(String name, String desc, XFile? icon) async {
@@ -661,20 +707,17 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 👑 11. ADMIN PANEL FUNCTIONS (ADDED)
+  // 👑 15. ADMIN PANEL FUNCTIONS
   // ---------------------------------------------------
 
-  // Saare Users ki List lao
   Stream<QuerySnapshot> getAllUsers() {
     return _firestore.collection('users').orderBy('timestamp', descending: true).snapshots();
   }
 
-  // Kisi User ko Premium ya Block karna
   Future<void> adminUpdateUser(String uid, {bool? makePremium, bool? blockUser}) async {
     Map<String, dynamic> data = {};
     if (makePremium != null) data['isPremium'] = makePremium;
     if (blockUser != null) data['isBlockedByAdmin'] = blockUser;
-
     await _firestore.collection('users').doc(uid).update(data);
   }
 }

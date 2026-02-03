@@ -65,8 +65,7 @@ class _MyAppState extends State<MyApp> {
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF6A11CB), // Purple
           secondary: Color(0xFF2575FC), // BlueAccent
-          surface: Color(0xFF1E1E1E), // Card Color
-          background: Color(0xFF121212),
+          surface: Color(0xFF1E1E1E),
         ),
 
         // Stylish App Bar

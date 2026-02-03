@@ -66,7 +66,7 @@ class _LoginScreenState extends State<LoginScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF6A11CB).withOpacity(0.5), // Purple
                 shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: const Color(0xFF6A11CB), blurRadius: 120, spreadRadius: 60)],
+                boxShadow: const [BoxShadow(color: Color(0xFF6A11CB), blurRadius: 120, spreadRadius: 60)],
               ),
             ),
           ),
@@ -77,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
               decoration: BoxDecoration(
                 color: const Color(0xFF2575FC).withOpacity(0.5), // Blue
                 shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: const Color(0xFF2575FC), blurRadius: 120, spreadRadius: 60)],
+                boxShadow: const [BoxShadow(color: Color(0xFF2575FC), blurRadius: 120, spreadRadius: 60)],
               ),
             ),
           ),
