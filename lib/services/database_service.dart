@@ -49,7 +49,6 @@ class DatabaseService {
   // 💬 2. MESSAGING SYSTEM
   // ---------------------------------------------------
 
-  // Send Message
   Future<void> sendMessage(String receiverId, String text, String receiverName, {bool isGroup = false}) async {
     String currentUserId = _auth.currentUser!.uid;
     String currentUserName = _auth.currentUser!.displayName ?? _auth.currentUser!.email!.split('@')[0]; 
@@ -90,10 +89,9 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 🔔 V1 NOTIFICATION LOGIC (NEW)
+  // 🔔 V1 NOTIFICATION LOGIC
   // ---------------------------------------------------
   
-  // 1. Get Access Token from JSON
   Future<String> getAccessToken() async {
     final jsonString = await rootBundle.loadString('assets/service-account.json');
     final accountCredentials = ServiceAccountCredentials.fromJson(jsonDecode(jsonString));
@@ -102,20 +100,14 @@ class DatabaseService {
     return authClient.credentials.accessToken.data;
   }
 
-  // 2. Send Notification using V1 API
   Future<void> sendPushNotification(String receiverId, String title, String msg) async {
     try {
-      // Receiver ka Token nikalo
       var userDoc = await _firestore.collection('users').doc(receiverId).get();
       if (!userDoc.exists || !userDoc.data()!.containsKey('fcm_token')) {
-        return; // Token nahi hai toh return
+        return;
       }
       String token = userDoc['fcm_token'];
-
-      // Access Token Generate karo
       String accessToken = await getAccessToken();
-
-      // 🟢 Project ID (Tumhare screenshot se 'hyper-swift-chat')
       String projectId = 'hyper-swift-chat'; 
       final String endpoint = 'https://fcm.googleapis.com/v1/projects/$projectId/messages:send';
 
@@ -149,13 +141,11 @@ class DatabaseService {
         },
         body: jsonEncode(message),
       );
-      
     } catch (e) {
       print("Notification Error: $e");
     }
   }
 
-  // Get Messages
   Stream<List<Message>> getMessages(String receiverId, {bool isGroup = false}) {
     String currentUserId = _auth.currentUser!.uid;
     String chatId;
@@ -180,6 +170,26 @@ class DatabaseService {
           .where((msg) => !msg.deletedBy.contains(currentUserId))
           .toList();
     });
+  }
+
+  // ---------------------------------------------------
+  // 💎 PREMIUM SYSTEM (NEW)
+  // ---------------------------------------------------
+  
+  // Check karo user Premium hai ya nahi
+  Future<bool> isUserPremium() async {
+    String uid = _auth.currentUser!.uid;
+    var doc = await _firestore.collection('users').doc(uid).get();
+    if (doc.exists && doc.data()!.containsKey('isPremium')) {
+      return doc.data()!['isPremium'] == true;
+    }
+    return false; // Default FREE user
+  }
+
+  // Testing ke liye: User ko Premium banao
+  Future<void> setPremiumStatus(bool status) async {
+    String uid = _auth.currentUser!.uid;
+    await _firestore.collection('users').doc(uid).set({'isPremium': status}, SetOptions(merge: true));
   }
 
   // ---------------------------------------------------
@@ -337,8 +347,6 @@ class DatabaseService {
   Future<void> deleteForEveryone(String receiverId, String messageId) async {
     String currentUserId = _auth.currentUser!.uid;
     String chatId;
-    // By default treat receiverId as a user id (personal chat) and build combined chatId.
-    // If caller passes a group chatId (which will be the chat doc id), it should pass it directly.
     if (receiverId.contains('_')) {
       chatId = receiverId;
     } else {
@@ -408,7 +416,6 @@ class DatabaseService {
     if (isGroup) {
       chatId = receiverId;
     } else if (receiverId.contains('_')) {
-      // If caller passed a combined chatId accidentally, accept it
       chatId = receiverId;
     } else {
       List<String> ids = [currentUserId, receiverId];
@@ -454,7 +461,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 👥 9. GROUP SYSTEM
+  // 👥 9. GROUP SYSTEM (WITH PREMIUM CHECK)
   // ---------------------------------------------------
 
   Stream<List<Map<String, dynamic>>> getMyFriends() {
@@ -474,6 +481,17 @@ class DatabaseService {
   }
 
   Future<void> createGroup(String groupName, XFile? groupIcon, List<String> memberIds) async {
+    // 💎 DIAMOND CHECK: Member Limit Validation
+    // Abhi limit 5 hai, premium ke liye 10000.
+    bool isPremium = await isUserPremium();
+    int limit = isPremium ? 10000 : 2; 
+
+    // +1 isliye kyunki Admin (main) bhi count hoga
+    if ((memberIds.length + 1) > limit) {
+      // Ye error UI pakad lega aur Premium Screen dikhayega
+      throw Exception("MEMBERS_LIMIT_EXCEEDED"); 
+    }
+
     String currentUserId = _auth.currentUser!.uid;
     List<String> participants = [currentUserId, ...memberIds];
     
@@ -509,6 +527,53 @@ class DatabaseService {
       'timestamp': FieldValue.serverTimestamp(),
       'deletedBy': [],
       'isRead': true,
+    });
+  }
+  // ---------------------------------------------------
+  // 📢 10. CHANNEL SYSTEM (Logic Added)
+  // ---------------------------------------------------
+
+  Future<void> createChannel(String name, String desc, XFile? icon) async {
+    String currentUserId = _auth.currentUser!.uid;
+    
+    // Channel ke liye naya document
+    DocumentReference channelRef = _firestore.collection('chats').doc();
+    String channelId = channelRef.id;
+
+    String? photoUrl;
+    if (icon != null) {
+       try {
+        String fileName = "channel_$channelId.jpg";
+        Reference ref = _storage.ref().child('channel_images/$fileName');
+        Uint8List imageData = await icon.readAsBytes();
+        UploadTask uploadTask = ref.putData(imageData, SettableMetadata(contentType: 'image/jpeg'));
+        photoUrl = await (await uploadTask).ref.getDownloadURL();
+      } catch (e) { print("Channel Icon Error: $e"); }
+    }
+
+    await channelRef.set({
+      'isGroup': true,      // Technical language mein ye bhi group jaisa hi hai
+      'isChannel': true,    // 🟢 NEW FLAG: Ye batayega ki ye Channel hai
+      'groupName': name,
+      'description': desc,
+      'groupIcon': photoUrl,
+      'adminId': currentUserId,
+      'participants': [currentUserId], // Shuru mein sirf admin
+      'memberCount': 1,     // 🟢 Count track karne ke liye
+      'hideMembers': false, // 🟢 Privacy Setting (Default: Sabko dikhega)
+      'lastMessage': "Channel Created",
+      'lastTime': FieldValue.serverTimestamp(),
+      'users': {} 
+    });
+
+    // Welcome Message
+    await channelRef.collection('messages').add({
+      'senderId': 'system',
+      'text': "Channel created. Only admin can send messages.",
+      'type': 'system',
+      'timestamp': FieldValue.serverTimestamp(),
+      'isRead': true,
+      'deletedBy': [],
     });
   }
 }

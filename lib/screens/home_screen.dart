@@ -1,15 +1,18 @@
+import 'dart:ui'; // Glass effect
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_database/firebase_database.dart'; // 🟢 FIX: Ye Missing tha
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
 import 'chat_screen.dart';
 import 'login_screen.dart';
-import 'edit_profile_screen.dart'; // Purana edit screen (agar chahiye)
-import 'profile_settings_screen.dart'; // 🆕 Naya Advanced Profile Page
-import 'placeholder_screens.dart'; // 🆕 Group/Channel/Settings Pages
+import 'edit_profile_screen.dart';
+import 'profile_settings_screen.dart';
+import 'create_group_screen.dart'; // Real Group Screen
+import 'premium_screen.dart'; // Premium Page
+import 'placeholder_screens.dart'; // Channel/Settings
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -25,9 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Pages List
   final List<Widget> _pages = [
-    RecentChatsPage(),       // Tab 1: Chats (Iska AppBar ab HomeScreen handle karega)
-    const SearchPage(),      // Tab 2: Friends (Iska apna AppBar hai)
-    const ProfilePage(),     // Tab 3: Profile (Iska apna AppBar hai)
+    RecentChatsPage(),       // Tab 1: Premium Chats + Stories
+    const SearchPage(),      // Tab 2: Friends
+    const ProfilePage(),     // Tab 3: Profile
   ];
 
   @override
@@ -37,17 +40,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _notificationService.initNotifications();
   }
 
-  // 🚪 Logout Logic
   void _handleLogout() async {
     await FirebaseAuth.instance.signOut();
-    Navigator.pushAndRemoveUntil(
-      context, 
-      MaterialPageRoute(builder: (_) => const LoginScreen()), 
-      (route) => false
-    );
+    if (mounted) {
+      Navigator.pushAndRemoveUntil(
+        context, 
+        MaterialPageRoute(builder: (_) => const LoginScreen()), 
+        (route) => false
+      );
+    }
   }
 
-  // 🔘 Menu Actions
   void _onMenuSelected(String value) {
     switch (value) {
       case 'profile':
@@ -58,6 +61,9 @@ class _HomeScreenState extends State<HomeScreen> {
         break;
       case 'channel':
         Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateChannelScreen()));
+        break;
+      case 'premium':
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
         break;
       case 'settings':
         Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
@@ -73,70 +79,89 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
 
-      // 🟢 APP BAR (Sirf Tab 0 - Chats par dikhega)
-      appBar: _currentIndex == 0 
-        ? AppBar(
-            title: const Text("Swift Chat", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-            backgroundColor: Colors.black,
-            elevation: 0,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.search, color: Colors.white), 
-                onPressed: () {
-                  setState(() { _currentIndex = 1; }); // Search Tab par bhejo
-                }
+      body: Stack(
+        children: [
+          // Purple Blob
+          Positioned(
+            top: -100, left: -50,
+            child: Container(
+              height: 300, width: 300,
+              decoration: BoxDecoration(
+                color: const Color(0xFF6A11CB).withOpacity(0.3),
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: const Color(0xFF6A11CB).withOpacity(0.4), blurRadius: 100, spreadRadius: 50)],
               ),
+            ),
+          ),
+          // Blue Blob
+          Positioned(
+            bottom: 100, right: -50,
+            child: Container(
+              height: 250, width: 250,
+              decoration: BoxDecoration(
+                color: const Color(0xFF2575FC).withOpacity(0.2),
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: const Color(0xFF2575FC).withOpacity(0.3), blurRadius: 100, spreadRadius: 50)],
+              ),
+            ),
+          ),
+          
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
               
-              // 👇 3-DOT MENU
-              PopupMenuButton<String>(
-                onSelected: _onMenuSelected,
-                icon: const Icon(Icons.more_vert, color: Colors.white),
-                color: Colors.grey[900],
-                itemBuilder: (BuildContext context) {
-                  return [
-                    const PopupMenuItem(
-                      value: 'profile',
-                      child: Row(children: [Icon(Icons.person, color: Colors.purpleAccent), SizedBox(width: 10), Text("Profile", style: TextStyle(color: Colors.white))]),
-                    ),
-                    const PopupMenuItem(
-                      value: 'group',
-                      child: Row(children: [Icon(Icons.group, color: Colors.purpleAccent), SizedBox(width: 10), Text("New Group", style: TextStyle(color: Colors.white))]),
-                    ),
-                    const PopupMenuItem(
-                      value: 'channel',
-                      child: Row(children: [Icon(Icons.speaker_notes, color: Colors.purpleAccent), SizedBox(width: 10), Text("New Channel", style: TextStyle(color: Colors.white))]),
-                    ),
-                    const PopupMenuItem(
-                      value: 'settings',
-                      child: Row(children: [Icon(Icons.settings, color: Colors.purpleAccent), SizedBox(width: 10), Text("Settings", style: TextStyle(color: Colors.white))]),
-                    ),
-                    const PopupMenuItem(
-                      value: 'logout',
-                      child: Row(children: [Icon(Icons.logout, color: Colors.redAccent), SizedBox(width: 10), Text("Logout", style: TextStyle(color: Colors.white))]),
-                    ),
-                  ];
-                },
-              ),
-            ],
-          )
-        : null, // Baki tabs par unka apna AppBar dikhega
+              appBar: _currentIndex == 0 
+                ? AppBar(
+                    title: const Text("Swift Chat", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
+                    backgroundColor: Colors.transparent,
+                    elevation: 0,
+                    actions: [
+                      IconButton(
+                        icon: const Icon(Icons.search, color: Colors.white), 
+                        onPressed: () => setState(() => _currentIndex = 1)
+                      ),
+                      
+                      PopupMenuButton<String>(
+                        onSelected: _onMenuSelected,
+                        icon: const Icon(Icons.more_vert, color: Colors.white),
+                        color: const Color(0xFF1E1E1E),
+                        itemBuilder: (BuildContext context) {
+                          return [
+                            const PopupMenuItem(value: 'profile', child: Row(children: [Icon(Icons.person, color: Colors.purpleAccent), SizedBox(width: 10), Text("Profile", style: TextStyle(color: Colors.white))])),
+                            const PopupMenuItem(value: 'group', child: Row(children: [Icon(Icons.group_add, color: Colors.purpleAccent), SizedBox(width: 10), Text("New Group", style: TextStyle(color: Colors.white))])),
+                            const PopupMenuItem(value: 'premium', child: Row(children: [Icon(Icons.workspace_premium, color: Colors.amber), SizedBox(width: 10), Text("Premium", style: TextStyle(color: Colors.amber))])),
+                            const PopupMenuItem(value: 'logout', child: Row(children: [Icon(Icons.logout, color: Colors.redAccent), SizedBox(width: 10), Text("Logout", style: TextStyle(color: Colors.white))])),
+                          ];
+                        },
+                      ),
+                    ],
+                  )
+                : null,
 
-      body: _pages[_currentIndex],
-      
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: Colors.black,
-        selectedItemColor: Colors.purpleAccent,
-        unselectedItemColor: Colors.grey,
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), label: "Chats"),
-          BottomNavigationBarItem(icon: Icon(Icons.people_outline), label: "Friends"),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: "Me"),
+              body: _pages[_currentIndex],
+
+              bottomNavigationBar: Container(
+                decoration: const BoxDecoration(
+                  border: Border(top: BorderSide(color: Colors.white12)),
+                  color: Colors.black45,
+                ),
+                child: BottomNavigationBar(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  selectedItemColor: const Color(0xFF6A11CB),
+                  unselectedItemColor: Colors.grey,
+                  currentIndex: _currentIndex,
+                  onTap: (index) => setState(() => _currentIndex = index),
+                  items: const [
+                    BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), activeIcon: Icon(Icons.chat_bubble), label: "Chats"),
+                    BottomNavigationBarItem(icon: Icon(Icons.people_outline), activeIcon: Icon(Icons.people), label: "Friends"),
+                    BottomNavigationBarItem(icon: Icon(Icons.person_outline), activeIcon: Icon(Icons.person), label: "Me"),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -144,10 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ---------------------------------------------------------
-// 🟢 TAB 1: RECENT CHATS PAGE (Cleaned - No AppBar)
-// ---------------------------------------------------------
-// ---------------------------------------------------------
-// 🟢 TAB 1: RECENT CHATS PAGE (Fixed for Groups)
+// 🟢 TAB 1: PREMIUM RECENT CHATS (Stories + Glass List)
 // ---------------------------------------------------------
 class RecentChatsPage extends StatelessWidget {
   final DatabaseService _dbService = DatabaseService();
@@ -157,147 +179,201 @@ class RecentChatsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _dbService.getRecentChats(),
-      builder: (context, snapshot) {
-        
-        if (snapshot.hasError) {
-          return Center(child: Text("Error: ${snapshot.error}", style: const TextStyle(color: Colors.red)));
-        }
-
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.purpleAccent));
-        }
-
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-           return const Center(
-             child: Column(
-               mainAxisAlignment: MainAxisAlignment.center,
-               children: [
-                 Icon(Icons.chat_bubble_outline, size: 50, color: Colors.grey),
-                 SizedBox(height: 10),
-                 Text("No chats yet.\nSearch & add friends!", 
-                   textAlign: TextAlign.center,
-                   style: TextStyle(color: Colors.grey)
-                 ),
-               ],
-             )
-           );
-        }
-
-        var docs = snapshot.data!.docs;
-
-        return ListView.builder(
-          itemCount: docs.length,
-          itemBuilder: (context, index) {
-            var doc = docs[index];
-            var data = doc.data() as Map<String, dynamic>;
-            
-            // 🟢 FIX 1: Check karo ki ye Group hai ya Personal Chat
-            bool isGroup = data['isGroup'] == true;
-            
-            String name = "Unknown";
-            String? image;
-            String chatTargetId; // ChatScreen ko ye ID bhejenge
-
-            if (isGroup) {
-              // 👉 AGAR GROUP HAI
-              name = data['groupName'] ?? "Group Chat";
-              image = data['groupIcon'];
-              chatTargetId = doc.id; // Group mein Doc ID hi Chat ID hoti hai
-            } else {
-              // 👉 AGAR PERSONAL CHAT HAI
-              List participants = data['participants'] ?? [];
-              chatTargetId = participants.firstWhere((id) => id != currentUserId, orElse: () => "");
-              if (chatTargetId.isEmpty) return const SizedBox();
-
-              Map usersMap = data['users'] ?? {};
-              name = usersMap[chatTargetId] ?? "Unknown";
-              // Personal chat ki image user profile se ayegi (abhi null rakha hai fallback ke liye)
-            }
-
-            // Message Display Logic
-            String lastMsg = data['lastMessage'] ?? "";
-            bool isPhoto = lastMsg == "📷 Photo" || (lastMsg.startsWith("http") && lastMsg.contains("firebasestorage"));
-            String displayMsg = isPhoto ? "📷 Photo" : lastMsg;
-
-            return Card(
-              color: Colors.grey[900],
-              margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
-                leading: Stack(
-                  children: [
-                    CircleAvatar(
-                      radius: 25,
-                      backgroundColor: isGroup ? Colors.deepPurple : Colors.purpleAccent,
-                      backgroundImage: image != null ? CachedNetworkImageProvider(image) : null,
-                      child: image == null 
-                        ? Icon(isGroup ? Icons.groups : Icons.person, color: Colors.white) 
-                        : null,
-                    ),
-                    
-                    // 🟢 FIX 2: Online Dot sirf Personal Chat par dikhana hai
-                    if (!isGroup)
-                      Positioned(
-                        bottom: 0,
-                        right: 0,
-                        child: StreamBuilder<DatabaseEvent>(
-                          stream: _dbService.getUserStatus(chatTargetId),
-                          builder: (context, statusSnapshot) {
-                            bool isOnline = false;
-                            if (statusSnapshot.hasData && statusSnapshot.data!.snapshot.value != null) {
-                              var statusData = statusSnapshot.data!.snapshot.value as Map;
-                              isOnline = statusData['state'] == 'online';
-                            }
-                            return Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: isOnline ? Colors.greenAccent : Colors.grey,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: Colors.black, width: 2),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                  ],
-                ),
-                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text(
-                  displayMsg, 
-                  style: TextStyle(
-                    color: isPhoto ? Colors.purpleAccent : Colors.white70, 
-                    fontStyle: isPhoto ? FontStyle.italic : FontStyle.normal
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () {
-                  // 🟢 FIX 3: ChatScreen par sahi ID aur Group flag bhejo
-                  Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => ChatScreen(
-                      receiverId: chatTargetId, 
-                      receiverName: name,
-                       isGroup: isGroup // Agar tumhara ChatScreen isGroup support karta hai to uncomment karo
-                    ),
-                  ));
+    return Column(
+      children: [
+        // STORIES SECTION
+        SizedBox(
+          height: 100,
+          child: StreamBuilder<List<Map<String, dynamic>>>(
+            stream: _dbService.getMyFriends(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData || snapshot.data!.isEmpty) return const SizedBox();
+              var friends = snapshot.data!;
+              
+              return ListView.builder(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                itemCount: friends.length + 1,
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    return _buildMyStory();
+                  }
+                  var friend = friends[index - 1];
+                  return _buildStoryItem(friend);
                 },
+              );
+            },
+          ),
+        ),
+
+        // CHAT LIST
+        Expanded(
+          child: StreamBuilder<QuerySnapshot>(
+            stream: _dbService.getRecentChats(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator(color: Color(0xFF6A11CB)));
+              }
+              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                 return const Center(child: Text("Start chatting by adding friends!", style: TextStyle(color: Colors.grey)));
+              }
+
+              var docs = snapshot.data!.docs;
+
+              return ListView.builder(
+                itemCount: docs.length,
+                padding: const EdgeInsets.only(top: 10),
+                itemBuilder: (context, index) {
+                  var doc = docs[index];
+                  var data = doc.data() as Map<String, dynamic>;
+                  
+                  bool isGroup = data['isGroup'] == true;
+                  String name = "Unknown";
+                  String? image;
+                  String chatTargetId; 
+
+                  if (isGroup) {
+                    name = data['groupName'] ?? "Group Chat";
+                    image = data['groupIcon'];
+                    chatTargetId = doc.id;
+                  } else {
+                    List participants = data['participants'] ?? [];
+                    chatTargetId = participants.firstWhere((id) => id != currentUserId, orElse: () => "");
+                    if (chatTargetId.isEmpty) return const SizedBox();
+                    Map usersMap = data['users'] ?? {};
+                    name = usersMap[chatTargetId] ?? "Unknown";
+                  }
+
+                  String lastMsg = data['lastMessage'] ?? "";
+                  bool isPhoto = lastMsg == "📷 Photo" || (lastMsg.startsWith("http") && lastMsg.contains("firebasestorage"));
+                  String displayMsg = isPhoto ? "📷 Photo" : lastMsg;
+
+                  return Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+                      leading: Stack(
+                        children: [
+                          CircleAvatar(
+                            radius: 26,
+                            backgroundColor: isGroup ? const Color(0xFF6A11CB) : const Color(0xFF2575FC),
+                            backgroundImage: image != null ? CachedNetworkImageProvider(image) : null,
+                            child: image == null 
+                              ? Icon(isGroup ? Icons.groups : Icons.person, color: Colors.white) 
+                              : null,
+                          ),
+                          if (!isGroup)
+                            Positioned(
+                              bottom: 0, right: 0,
+                              child: StreamBuilder<DatabaseEvent>(
+                                stream: _dbService.getUserStatus(chatTargetId),
+                                builder: (context, statusSnapshot) {
+                                  bool isOnline = false;
+                                  if (statusSnapshot.hasData && statusSnapshot.data!.snapshot.value != null) {
+                                    var statusData = statusSnapshot.data!.snapshot.value as Map;
+                                    isOnline = statusData['state'] == 'online';
+                                  }
+                                  return Container(
+                                    width: 14, height: 14,
+                                    decoration: BoxDecoration(
+                                      color: isOnline ? Colors.greenAccent : Colors.grey,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.black, width: 2),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
+                      title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                      subtitle: Text(
+                        displayMsg, 
+                        style: TextStyle(color: isPhoto ? const Color(0xFF6A11CB) : Colors.white60),
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () {
+                        Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => ChatScreen(receiverId: chatTargetId, receiverName: name, isGroup: isGroup),
+                        ));
+                      },
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMyStory() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+      child: Column(
+        children: [
+          Stack(
+            children: [
+              const CircleAvatar(
+                radius: 30,
+                backgroundColor: Colors.grey,
+                child: Icon(Icons.person, color: Colors.white),
               ),
-            );
-          },
-        );
-      },
+              Positioned(
+                bottom: 0, right: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: const BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle),
+                  child: const Icon(Icons.add, size: 14, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          const Text("My Story", style: TextStyle(color: Colors.white70, fontSize: 11)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStoryItem(Map<String, dynamic> friend) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(2),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(colors: [Colors.purple, Colors.orange]), 
+            ),
+            child: CircleAvatar(
+              radius: 28,
+              backgroundColor: Colors.black,
+              backgroundImage: friend['profile_pic'] != null ? CachedNetworkImageProvider(friend['profile_pic']) : null,
+              child: friend['profile_pic'] == null ? Text(friend['username'][0].toUpperCase()) : null,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            friend['username'], 
+            style: const TextStyle(color: Colors.white70, fontSize: 11),
+            maxLines: 1, overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
     );
   }
 }
-// ---------------------------------------------------------
-// 🔍 TAB 2: SEARCH PAGE (No Changes Needed)
-// ---------------------------------------------------------
+
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
-
   @override
   _SearchPageState createState() => _SearchPageState();
 }
@@ -321,27 +397,26 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         title: TextField(
           controller: _searchController,
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
-            hintText: "Search by Username...",
+            hintText: "Search Username...",
             hintStyle: TextStyle(color: Colors.white54),
             border: InputBorder.none,
           ),
           onSubmitted: (_) => _performSearch(),
         ),
-        actions: [
-          IconButton(icon: const Icon(Icons.search, color: Colors.purpleAccent), onPressed: _performSearch)
-        ],
+        actions: [IconButton(icon: const Icon(Icons.search, color: Color(0xFF6A11CB)), onPressed: _performSearch)],
       ),
       body: _isLoading 
-          ? const Center(child: CircularProgressIndicator(color: Colors.purpleAccent)) 
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFF6A11CB))) 
           : (_searchResults == null || _searchResults!.docs.isEmpty)
-              ? const Center(child: Text("Search for friends by username", style: TextStyle(color: Colors.white54)))
+              ? const Center(child: Text("Find friends...", style: TextStyle(color: Colors.white54)))
               : ListView.builder(
                   itemCount: _searchResults!.docs.length,
                   itemBuilder: (context, index) {
@@ -367,39 +442,13 @@ class _SearchPageState extends State<SearchPage> {
                           if (!snapshot.hasData) return const SizedBox();
                           String status = snapshot.data!;
                           if (status == "friends") {
-                            return IconButton(
-                              icon: const Icon(Icons.chat_bubble, color: Colors.purpleAccent),
-                              onPressed: () {
-                                Navigator.push(context, MaterialPageRoute(
-                                  builder: (_) => ChatScreen(receiverId: uid, receiverName: name),
-                                ));
-                              },
-                            );
+                            return IconButton(icon: const Icon(Icons.chat_bubble, color: Color(0xFF6A11CB)), onPressed: () {
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(receiverId: uid, receiverName: name)));
+                            });
                           }
-                          if (status == "request_sent") {
-                            return ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[800]),
-                              onPressed: () => _dbService.cancelFriendRequest(uid),
-                              child: const Text("Cancel", style: TextStyle(color: Colors.white)),
-                            );
-                          }
-                          if (status == "request_received") {
-                            return Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.check_circle, color: Colors.greenAccent),
-                                  onPressed: () => _dbService.acceptFriendRequest(uid),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.cancel, color: Colors.redAccent),
-                                  onPressed: () => _dbService.rejectFriendRequest(uid),
-                                ),
-                              ],
-                            );
-                          }
+                          if (status == "request_sent") return const Text("Sent", style: TextStyle(color: Colors.grey));
                           return ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent),
+                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6A11CB)),
                             onPressed: () => _dbService.sendFriendRequest(uid),
                             child: const Text("Add", style: TextStyle(color: Colors.white)),
                           );
@@ -412,39 +461,22 @@ class _SearchPageState extends State<SearchPage> {
   }
 }
 
-// ---------------------------------------------------------
-// 👤 TAB 3: PROFILE PAGE (No Changes Needed)
-// ---------------------------------------------------------
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
-
   @override
   Widget build(BuildContext context) {
     final DatabaseService dbService = DatabaseService();
-
     return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text("Profile", style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.black,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit, color: Colors.purpleAccent),
-            onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfileScreen()));
-            },
-          )
-        ],
-      ),
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(title: const Text("Profile"), backgroundColor: Colors.transparent, actions: [
+        IconButton(icon: const Icon(Icons.edit, color: Color(0xFF6A11CB)), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfileScreen())))
+      ]),
       body: StreamBuilder<DocumentSnapshot>(
         stream: dbService.getUserData(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.purpleAccent));
-
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
           var userData = snapshot.data!.data() as Map<String, dynamic>?;
           String name = userData?['username'] ?? "User";
-          String email = userData?['email'] ?? "No Email";
           String? photoUrl = userData?['profile_pic'];
 
           return Center(
@@ -454,34 +486,11 @@ class ProfilePage extends StatelessWidget {
                 CircleAvatar(
                   radius: 60,
                   backgroundColor: Colors.grey[900],
-                  backgroundImage: photoUrl != null 
-                      ? CachedNetworkImageProvider(photoUrl) 
-                      : null,
-                  child: photoUrl == null 
-                      ? const Icon(Icons.person, size: 60, color: Colors.purpleAccent) 
-                      : null,
+                  backgroundImage: photoUrl != null ? CachedNetworkImageProvider(photoUrl) : null,
+                  child: photoUrl == null ? const Icon(Icons.person, size: 60, color: Color(0xFF6A11CB)) : null,
                 ),
                 const SizedBox(height: 20),
-                Text(name, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 5),
-                Text(email, style: const TextStyle(color: Colors.grey, fontSize: 14)),
-                const SizedBox(height: 40),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent.withOpacity(0.2),
-                    padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                        side: const BorderSide(color: Colors.redAccent)
-                    ),
-                  ),
-                  icon: const Icon(Icons.logout, color: Colors.redAccent),
-                  label: const Text("Sign Out", style: TextStyle(color: Colors.redAccent)),
-                  onPressed: () async {
-                    await FirebaseAuth.instance.signOut();
-                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-                  },
-                )
+                Text(name, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
               ],
             ),
           );
