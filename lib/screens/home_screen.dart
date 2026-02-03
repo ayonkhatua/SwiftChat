@@ -13,7 +13,7 @@ import 'profile_settings_screen.dart';
 import 'create_group_screen.dart';
 import 'premium_screen.dart';
 import 'placeholder_screens.dart'; 
-import 'wallet_screen.dart'; // 🟢 ADDED: Wallet Screen Import
+import 'wallet_screen.dart'; // 🟢 Wallet Import
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -258,7 +258,12 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ---------------------------------------------------------
-// 🟢 TAB 1: RECENT CHATS (WITH VIP BORDER LOGIC)
+// 🟢 TAB 1: RECENT CHATS (WITH VIP BORDER & GOLD TEXT)
+// ---------------------------------------------------------
+// ... Upar ka code same rahega ...
+
+// ---------------------------------------------------------
+// 🟢 TAB 1: RECENT CHATS (FIXED)
 // ---------------------------------------------------------
 class RecentChatsPage extends StatelessWidget {
   final DatabaseService _dbService = DatabaseService();
@@ -343,7 +348,6 @@ class RecentChatsPage extends StatelessWidget {
                       if(userSnap.hasData && userSnap.data!.exists) {
                         var userData = userSnap.data!.data() as Map<String, dynamic>;
                         isPremium = userData['isPremium'] ?? false;
-                        // Agar chat data mein photo purani hai toh user data se update le lo
                         if(!isGroup && userData['profile_pic'] != null) image = userData['profile_pic'];
                       }
 
@@ -358,13 +362,13 @@ class RecentChatsPage extends StatelessWidget {
                           contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
                           leading: Stack(
                             children: [
-                              // 💎 PREMIUM BORDER CONTAINER
+                              // 💎 PREMIUM BORDER
                               Container(
-                                padding: const EdgeInsets.all(2.5), // Border Width
+                                padding: const EdgeInsets.all(2.5), 
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   gradient: isPremium 
-                                    ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent, Color(0xFFFFD700)]) // Gold & Purple
+                                    ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent, Color(0xFFFFD700)]) 
                                     : null, 
                                   color: isPremium ? null : Colors.transparent,
                                 ),
@@ -403,10 +407,20 @@ class RecentChatsPage extends StatelessWidget {
                           ),
                           title: Row(
                             children: [
-                              Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                              // 👑 ANIMATED COLOR USERNAME
+                              isPremium 
+                                ? ShaderMask(
+                                    shaderCallback: (bounds) => const LinearGradient(
+                                      colors: [Color(0xFFFFD700), Color(0xFFFFE0B2), Color(0xFFFFD700)],
+                                      tileMode: TileMode.mirror,
+                                    ).createShader(bounds),
+                                    child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                  )
+                                : Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                              
                               if (isPremium) ...[
                                 const SizedBox(width: 5),
-                                const Icon(Icons.verified, color: Colors.blueAccent, size: 16), // Verified Badge
+                                const Icon(Icons.star_rounded, color: Color(0xFFFFD700), size: 18), 
                               ]
                             ],
                           ),
@@ -492,6 +506,9 @@ class RecentChatsPage extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------
+// 🟢 TAB 2: SEARCH PAGE (NOW WITH PREMIUM EFFECTS)
+// ---------------------------------------------------------
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
   @override
@@ -545,16 +562,17 @@ class _SearchPageState extends State<SearchPage> {
                     String name = data['username'] ?? "Unknown";
                     String email = data['email'] ?? "";
                     String? photoUrl = data['profile_pic'];
-                    bool isPremium = data['isPremium'] ?? false; // Search mein bhi dikhna chahiye
+                    bool isPremium = data['isPremium'] ?? false; // 🟢 CHECK PREMIUM
 
                     if (uid == FirebaseAuth.instance.currentUser!.uid) return const SizedBox(); 
 
                     return ListTile(
                       leading: Container(
-                        padding: const EdgeInsets.all(2),
+                        padding: const EdgeInsets.all(2.5),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          gradient: isPremium ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent]) : null,
+                          // 💎 PREMIUM BORDER
+                          gradient: isPremium ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent, Color(0xFFFFD700)]) : null,
                         ),
                         child: CircleAvatar(
                           backgroundImage: photoUrl != null ? CachedNetworkImageProvider(photoUrl) : null,
@@ -564,8 +582,20 @@ class _SearchPageState extends State<SearchPage> {
                       ),
                       title: Row(
                         children: [
-                          Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          if(isPremium) ...[const SizedBox(width: 5), const Icon(Icons.verified, color: Colors.blueAccent, size: 16)]
+                          // 👑 ANIMATED COLOR USERNAME (SEARCH)
+                          isPremium 
+                            ? ShaderMask(
+                                shaderCallback: (bounds) => const LinearGradient(
+                                  colors: [Color(0xFFFFD700), Color(0xFFFFE0B2), Color(0xFFFFD700)],
+                                ).createShader(bounds),
+                                child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                              )
+                            : Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          
+                          if(isPremium) ...[
+                            const SizedBox(width: 5), 
+                            const Icon(Icons.star_rounded, color: Color(0xFFFFD700), size: 16)
+                          ]
                         ],
                       ),
                       subtitle: Text(email, style: const TextStyle(color: Colors.grey)),
@@ -617,7 +647,7 @@ class ProfilePage extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // 💎 PROFILE GLOW LOGIC
+                // 💎 PROFILE GLOW
                 Container(
                   padding: const EdgeInsets.all(4),
                   decoration: BoxDecoration(
@@ -636,12 +666,23 @@ class ProfilePage extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(name, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                    if(isPremium) ...[const SizedBox(width: 8), const Icon(Icons.verified, color: Colors.blueAccent, size: 24)]
+                    // 👑 ANIMATED COLOR USERNAME (PROFILE)
+                    isPremium 
+                      ? ShaderMask(
+                          shaderCallback: (bounds) => const LinearGradient(
+                            colors: [Color(0xFFFFD700), Color(0xFFFFE0B2), Color(0xFFFFD700)],
+                          ).createShader(bounds),
+                          child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                        )
+                      : Text(name, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                    
+                    if(isPremium) ...[
+                      const SizedBox(width: 8), 
+                      const Icon(Icons.star_rounded, color: Color(0xFFFFD700), size: 24)
+                    ]
                   ],
                 ),
                 
-                // 🟢 WALLET BUTTON (UPDATED)
                 const SizedBox(height: 20),
                 ElevatedButton.icon(
                   onPressed: () {

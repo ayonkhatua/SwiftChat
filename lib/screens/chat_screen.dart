@@ -1,14 +1,15 @@
 import 'dart:io';
-import 'dart:ui'; // Glass effect
+import 'dart:ui';
+import 'dart:async'; // Timer ke liye
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Clipboard
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart'; // 🟢 FIXED: YE MISSING THA
+import 'package:firebase_database/firebase_database.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:record/record.dart'; // 🎙️ Audio Record
-import 'package:audioplayers/audioplayers.dart'; // 🎧 Audio Play
+import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/database_service.dart';
@@ -46,9 +47,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _wallpaperImage;
   bool _isBlocked = false;
   
-  // 🔄 Reply & Edit State
+  // 🔄 Reply, Edit & Highlight State
   Message? _replyMessage;
-  Message? _editingMessage; // ✏️ Editing ke liye
+  Message? _editingMessage;
+  String? _highlightedMessageId; // 🔦 Message Highlight karne ke liye
 
   @override
   void initState() {
@@ -86,6 +88,17 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  // 🔦 HIGHLIGHT LOGIC
+  void _highlightMessage(String messageId) {
+    setState(() {
+      _highlightedMessageId = messageId;
+    });
+    // 1 second baad highlight hata do
+    Timer(const Duration(milliseconds: 800), () {
+      if (mounted) setState(() => _highlightedMessageId = null);
+    });
+  }
+
   // 🎙️ RECORDING LOGIC
   Future<void> _startRecording() async {
     if (await Permission.microphone.request().isGranted) {
@@ -111,7 +124,6 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _isRecording = false);
   }
 
-  // 🎧 PLAY AUDIO
   Future<void> _playAudio(String url) async {
     if (_currentlyPlayingUrl == url && _isPlaying) {
       await _audioPlayer.pause();
@@ -126,12 +138,11 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // 📨 SEND / EDIT MESSAGE LOGIC
+  // 📨 SEND MESSAGE LOGIC
   void _sendMessage() async {
     String text = _messageController.text.trim();
     if (text.isEmpty) return;
     
-    // ✏️ EDIT MODE
     if (_editingMessage != null) {
       String currentUserId = FirebaseAuth.instance.currentUser!.uid;
       String chatId = widget.isGroup ? widget.receiverId : 
@@ -145,14 +156,12 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    // NORMAL SEND
     if (!widget.isGroup) {
       bool amIBlocked = await _dbService.amIBlockedBy(widget.receiverId);
       if (amIBlocked) { _showSnack("You cannot send messages."); return; }
       if (_isBlocked) { _showSnack("Unblock user first."); return; }
     }
 
-    // 🟢 USING DATABASE SERVICE (Updated for Reply)
     await _dbService.sendMessage(
       widget.receiverId, 
       text, 
@@ -178,7 +187,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // ❤️ REACTION LOGIC
   void _toggleReaction(String docId, String emoji) async {
     String currentUserId = FirebaseAuth.instance.currentUser!.uid;
     String chatId = widget.isGroup 
@@ -189,26 +197,37 @@ class _ChatScreenState extends State<ChatScreen> {
     Navigator.pop(context); 
   }
 
-  // 📌 PIN LOGIC
+  // 📌 MULTIPLE PIN LOGIC (Updated)
   void _pinMessage(Message msg) async {
     String currentUserId = FirebaseAuth.instance.currentUser!.uid;
     String chatId = widget.isGroup 
         ? widget.receiverId 
         : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
 
-    // Toggle Pin (Simple Implementation: Update chat metadata)
+    // Use arrayUnion to add to list
     await FirebaseFirestore.instance.collection('chats').doc(chatId).update({
-      'pinnedMessage': {
+      'pinnedMessages': FieldValue.arrayUnion([{
         'text': msg.type == 'image' ? "📷 Photo" : msg.text,
         'id': msg.messageId,
         'sender': msg.senderName
-      }
+      }])
     });
     Navigator.pop(context);
     _showSnack("Message Pinned 📌");
   }
 
-  // ⏩ FORWARD LOGIC
+  void _unpinMessage(Map<String, dynamic> pinData) async {
+    String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+    String chatId = widget.isGroup 
+        ? widget.receiverId 
+        : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
+
+    await FirebaseFirestore.instance.collection('chats').doc(chatId).update({
+      'pinnedMessages': FieldValue.arrayRemove([pinData])
+    });
+    _showSnack("Message Unpinned");
+  }
+
   void _forwardMessage(Message msg) {
     Navigator.pop(context);
     showModalBottomSheet(
@@ -220,7 +239,7 @@ class _ChatScreenState extends State<ChatScreen> {
             const Padding(padding: EdgeInsets.all(15), child: Text("Forward to...", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
             Expanded(
               child: StreamBuilder<List<Map<String, dynamic>>>(
-                stream: _dbService.getMyFriends(), // Forward to friends
+                stream: _dbService.getMyFriends(), 
                 builder: (context, snapshot) {
                   if(!snapshot.hasData) return const Center(child: CircularProgressIndicator());
                   var friends = snapshot.data!;
@@ -234,7 +253,6 @@ class _ChatScreenState extends State<ChatScreen> {
                         trailing: IconButton(
                           icon: const Icon(Icons.send, color: Colors.blueAccent),
                           onPressed: () {
-                             // Send as new message
                              _dbService.sendMessage(friend['uid'], msg.text, friend['username']);
                              Navigator.pop(context);
                              _showSnack("Forwarded to ${friend['username']}");
@@ -252,13 +270,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  // 📱 TELEGRAM STYLE SINGLE TAP MENU
+  // 📱 TELEGRAM STYLE MENU (With Down Arrow)
   void _showMessageOptions(Message msg, String docId) {
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
       barrierLabel: '',
-      barrierColor: Colors.black.withOpacity(0.6), // Dim Background
+      barrierColor: Colors.black.withOpacity(0.6),
       transitionDuration: const Duration(milliseconds: 200),
       pageBuilder: (ctx, anim1, anim2) => Container(),
       transitionBuilder: (ctx, anim1, anim2, child) {
@@ -270,7 +288,7 @@ class _ChatScreenState extends State<ChatScreen> {
             content: Container(
               width: 300,
               decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E).withOpacity(0.95), // Dark Telegram Grey
+                color: const Color(0xFF1E1E1E).withOpacity(0.95),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.white12),
                 boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 20, spreadRadius: 5)]
@@ -288,17 +306,32 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
-                        children: ["❤️", "👍", "👎", "🔥", "🥰", "👏", "😂", "😮", "😢"].map((e) => 
+                        children: [
+                          ...["❤️", "👍", "👎", "🔥", "😂", "😢", "😡"].map((e) => 
+                            GestureDetector(
+                              onTap: () => _toggleReaction(docId, e),
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 6),
+                                padding: const EdgeInsets.all(5),
+                                decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
+                                child: Text(e, style: const TextStyle(fontSize: 26)),
+                              ),
+                            )
+                          ).toList(),
+                          // 🔽 DOWN ARROW FOR KEYBOARD
                           GestureDetector(
-                            onTap: () => _toggleReaction(docId, e),
+                            onTap: () {
+                              Navigator.pop(context);
+                              _showCustomReactionInput(docId);
+                            },
                             child: Container(
-                              margin: const EdgeInsets.symmetric(horizontal: 6),
-                              padding: const EdgeInsets.all(5),
-                              decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
-                              child: Text(e, style: const TextStyle(fontSize: 26)),
+                              margin: const EdgeInsets.only(left: 8),
+                              padding: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white24),
+                              child: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 20),
                             ),
                           )
-                        ).toList(),
+                        ],
                       ),
                     ),
                   ),
@@ -332,6 +365,42 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ⌨️ KEYBOARD REACTION INPUT
+  void _showCustomReactionInput(String docId) {
+    TextEditingController customEmojiController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text("Type an Emoji", style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: customEmojiController,
+          autofocus: true,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 30, color: Colors.white),
+          decoration: const InputDecoration(
+            border: InputBorder.none, 
+            hintText: "😀", 
+            hintStyle: TextStyle(color: Colors.grey)
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () { 
+              if(customEmojiController.text.isNotEmpty) {
+                // Use first character as emoji
+                _toggleReaction(docId, customEmojiController.text.characters.first); 
+              } else {
+                Navigator.pop(context);
+              }
+            }, 
+            child: const Text("React", style: TextStyle(color: Colors.blueAccent))
+          )
+        ],
+      )
     );
   }
 
@@ -383,7 +452,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
           Column(
             children: [
-              // 🟢 APP BAR WITH PINNED MESSAGE
+              // 🟢 APP BAR WITH MULTIPLE PINNED MESSAGES (CAROUSEL)
               SafeArea(
                 child: Column(
                   children: [
@@ -406,7 +475,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                   stream: _dbService.getTypingStatus(widget.receiverId),
                                   builder: (context, snapshot) {
                                     if (snapshot.data == true) return const Text("Typing...", style: TextStyle(fontSize: 12, color: Colors.blueAccent));
-                                    // 🟢 Presence Status (Instagram Style)
+                                    // 🟢 Presence Status
                                     return StreamBuilder<DatabaseEvent>(
                                       stream: _dbService.getUserStatus(widget.receiverId),
                                       builder: (context, statSnap) {
@@ -431,24 +500,60 @@ class _ChatScreenState extends State<ChatScreen> {
                         ],
                       ),
                     ),
-                    // 📌 PINNED MESSAGE BAR
+                    
+                    // 📌 MULTIPLE PINNED MESSAGE BAR (Carousel)
                     StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance.collection('chats').doc(widget.isGroup ? widget.receiverId : (FirebaseAuth.instance.currentUser!.uid.compareTo(widget.receiverId) < 0 ? "${FirebaseAuth.instance.currentUser!.uid}_${widget.receiverId}" : "${widget.receiverId}_${FirebaseAuth.instance.currentUser!.uid}")).snapshots(),
                       builder: (context, snapshot) {
                         if(!snapshot.hasData) return const SizedBox();
                         var data = snapshot.data!.data() as Map<String, dynamic>?;
-                        if(data == null || !data.containsKey('pinnedMessage')) return const SizedBox();
-                        var pin = data['pinnedMessage'];
+                        
+                        // Check for 'pinnedMessages' list (New) or fallback to 'pinnedMessage' map (Old)
+                        List pins = [];
+                        if (data != null) {
+                          if (data.containsKey('pinnedMessages')) {
+                            pins = List.from(data['pinnedMessages']);
+                          } else if (data.containsKey('pinnedMessage')) {
+                            pins = [data['pinnedMessage']];
+                          }
+                        }
+                        
+                        if(pins.isEmpty) return const SizedBox();
+
                         return Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                          height: 50, // Fixed height for carousel
                           decoration: BoxDecoration(color: Colors.grey[900], border: const Border(left: BorderSide(color: Colors.blueAccent, width: 4))),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text("Pinned Message", style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-                              Text(pin['text'] ?? "", style: const TextStyle(color: Colors.white, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
-                            ],
+                          child: PageView.builder(
+                            itemCount: pins.length,
+                            scrollDirection: Axis.vertical, // Vertical Scroll like Telegram
+                            itemBuilder: (context, index) {
+                              var pin = pins[index];
+                              return GestureDetector(
+                                onTap: () => _highlightMessage(pin['id']), // 🔦 Highlight on click
+                                onLongPress: () => _unpinMessage(pin), // Unpin on long press
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.push_pin, color: Colors.blueAccent, size: 16),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Text(pin['sender'] ?? "Pinned", style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                                            Text(pin['text'] ?? "", style: const TextStyle(color: Colors.white, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                          ],
+                                        ),
+                                      ),
+                                      const Icon(Icons.close, size: 14, color: Colors.grey)
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         );
                       },
@@ -554,12 +659,17 @@ class _ChatScreenState extends State<ChatScreen> {
     Map<String, int> reactionCounts = {};
     msg.reactions.forEach((key, value) => reactionCounts[value] = (reactionCounts[value] ?? 0) + 1);
 
+    // 🔦 HIGHLIGHT LOGIC CHECK
+    bool isHighlighted = _highlightedMessageId == msg.messageId;
+
     return GestureDetector(
-      onTap: () => _showMessageOptions(msg, msg.messageId), // 🟢 SINGLE TAP MENU
-      child: Align(
-        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+      onTap: () => _showMessageOptions(msg, msg.messageId), 
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 500),
+        color: isHighlighted ? Colors.white.withOpacity(0.2) : Colors.transparent, // ✨ Flash Effect
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        child: Align(
+          alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
           child: Column(
             crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             children: [
@@ -599,12 +709,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       Text(msg.text, style: const TextStyle(color: Colors.white, fontSize: 16)),
 
                     const SizedBox(height: 4),
+                    
+                    // 🟢 INSTAGRAM STYLE STATUS (Sent -> Seen)
                     Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.end, children: [
                       Text(timeString, style: TextStyle(color: Colors.white70, fontSize: 10)),
                       if(isMe) ...[
                         const SizedBox(width: 5),
-                        // 🟢 Instagram Style Status (Check, Double Check, Blue Check)
-                        Icon(Icons.done_all, size: 14, color: msg.isRead ? Colors.blueAccent : Colors.white54) 
+                        Text(
+                          msg.isRead ? "Seen" : "Sent", 
+                          style: TextStyle(
+                            color: msg.isRead ? Colors.white70 : Colors.white30, 
+                            fontSize: 10, 
+                            fontWeight: FontWeight.bold
+                          )
+                        )
                       ]
                     ]),
                   ],
