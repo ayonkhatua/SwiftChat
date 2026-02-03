@@ -2,7 +2,7 @@ import 'dart:ui'; // Glass effect
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart'; // 🟢 FIX: Ye Missing tha
+import 'package:firebase_database/firebase_database.dart'; // 🟢 FIX: Added
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
@@ -10,9 +10,9 @@ import 'chat_screen.dart';
 import 'login_screen.dart';
 import 'edit_profile_screen.dart';
 import 'profile_settings_screen.dart';
-import 'create_group_screen.dart'; // Real Group Screen
-import 'premium_screen.dart'; // Premium Page
-import 'placeholder_screens.dart'; // Channel/Settings
+import 'create_group_screen.dart';
+import 'premium_screen.dart';
+import 'placeholder_screens.dart'; // Ensure CreateChannelScreen is exported here or import directly
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -74,6 +74,82 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // 👻 GHOST MODE PANEL (Bottom Sheet)
+  void _showGhostPanel(BuildContext context, Map<String, dynamic> userData) {
+    bool hideOnline = userData['ghost_hide_online'] ?? false;
+    bool hideSeen = userData['ghost_hide_seen'] ?? false;
+    bool hideStoryView = userData['ghost_hide_story_view'] ?? false;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.9),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(25)),
+                border: Border(top: BorderSide(color: Colors.purpleAccent.withOpacity(0.5), width: 2)),
+                boxShadow: [BoxShadow(color: Colors.purpleAccent.withOpacity(0.2), blurRadius: 20, spreadRadius: 5)]
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.privacy_tip, color: Colors.purpleAccent, size: 40),
+                  const SizedBox(height: 10),
+                  const Text("GHOST MODE 👻", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                  const Text("Be invisible. Watch everything.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const SizedBox(height: 30),
+
+                  // 1. HIDE ONLINE STATUS
+                  _buildGhostSwitch("Freeze Online Status", "You will appear offline to everyone.", hideOnline, (val) async {
+                    setModalState(() => hideOnline = val);
+                    await _dbService.updateGhostSettings('ghost_hide_online', val);
+                  }),
+
+                  // 2. HIDE READ RECEIPTS
+                  _buildGhostSwitch("Ninja Seen (No Blue Tick)", "Read messages without letting them know.", hideSeen, (val) async {
+                    setModalState(() => hideSeen = val);
+                    await _dbService.updateGhostSettings('ghost_hide_seen', val);
+                  }),
+
+                  // 3. HIDE STORY VIEW
+                  _buildGhostSwitch("Anonymous Story View", "View stories without appearing in list.", hideStoryView, (val) async {
+                    setModalState(() => hideStoryView = val);
+                    await _dbService.updateGhostSettings('ghost_hide_story_view', val);
+                  }),
+
+                  const SizedBox(height: 20),
+                ],
+              ),
+            );
+          }
+        );
+      },
+    );
+  }
+
+  Widget _buildGhostSwitch(String title, String subtitle, bool value, Function(bool) onChanged) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 15),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: value ? Colors.purpleAccent : Colors.transparent),
+      ),
+      child: SwitchListTile(
+        activeColor: Colors.purpleAccent,
+        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        subtitle: Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 10)),
+        value: value,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -117,6 +193,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     backgroundColor: Colors.transparent,
                     elevation: 0,
                     actions: [
+                      // 👻 GHOST MODE ICON (Only for Premium Users)
+                      StreamBuilder<DocumentSnapshot>(
+                        stream: FirebaseFirestore.instance.collection('users').doc(FirebaseAuth.instance.currentUser!.uid).snapshots(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox();
+                          var data = snapshot.data!.data() as Map<String, dynamic>?;
+                          
+                          // Check Premium Status
+                          bool isPremium = data?['isPremium'] ?? false;
+                          if (!isPremium) return const SizedBox(); 
+
+                          return IconButton(
+                            icon: const Icon(Icons.vpn_key_off_rounded, color: Colors.purpleAccent), // Ghost Key Icon
+                            onPressed: () => _showGhostPanel(context, data ?? {}),
+                          );
+                        },
+                      ),
+
                       IconButton(
                         icon: const Icon(Icons.search, color: Colors.white), 
                         onPressed: () => setState(() => _currentIndex = 1)
@@ -130,6 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           return [
                             const PopupMenuItem(value: 'profile', child: Row(children: [Icon(Icons.person, color: Colors.purpleAccent), SizedBox(width: 10), Text("Profile", style: TextStyle(color: Colors.white))])),
                             const PopupMenuItem(value: 'group', child: Row(children: [Icon(Icons.group_add, color: Colors.purpleAccent), SizedBox(width: 10), Text("New Group", style: TextStyle(color: Colors.white))])),
+                            const PopupMenuItem(value: 'channel', child: Row(children: [Icon(Icons.campaign, color: Colors.purpleAccent), SizedBox(width: 10), Text("New Channel", style: TextStyle(color: Colors.white))])),
                             const PopupMenuItem(value: 'premium', child: Row(children: [Icon(Icons.workspace_premium, color: Colors.amber), SizedBox(width: 10), Text("Premium", style: TextStyle(color: Colors.amber))])),
                             const PopupMenuItem(value: 'logout', child: Row(children: [Icon(Icons.logout, color: Colors.redAccent), SizedBox(width: 10), Text("Logout", style: TextStyle(color: Colors.white))])),
                           ];

@@ -1,3 +1,4 @@
+import 'dart:io'; // 🟢 ZAROORI: File Handling ke liye
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -5,8 +6,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:googleapis_auth/auth_io.dart'; // 🟢 Added for V1 Token
-import 'package:flutter/services.dart'; // 🟢 Added for Asset Reading
+import 'package:googleapis_auth/auth_io.dart'; 
+import 'package:flutter/services.dart'; 
 import '../models/message_model.dart';
 
 class DatabaseService {
@@ -16,7 +17,7 @@ class DatabaseService {
   final FirebaseStorage _storage = FirebaseStorage.instance; 
 
   // ---------------------------------------------------
-  // 🟢 1. PRESENCE SYSTEM
+  // 🟢 1. PRESENCE SYSTEM (UPDATED FOR GHOST MODE 👻)
   // ---------------------------------------------------
   void setupPresenceSystem() {
     User? user = _auth.currentUser;
@@ -26,14 +27,31 @@ class DatabaseService {
     DatabaseReference userStatusRef = _rtdb.ref('/status/$uid');
     DatabaseReference connectedRef = _rtdb.ref('.info/connected');
 
-    connectedRef.onValue.listen((event) {
+    connectedRef.onValue.listen((event) async {
       bool isConnected = event.snapshot.value as bool? ?? false;
-      if (isConnected) {
+      
+      // 👻 GHOST CHECK: Kya user ne Online Status chupaya hai?
+      // Hum har baar Firestore se check karenge taaki setting change hote hi asar dikhe
+      var doc = await _firestore.collection('users').doc(uid).get();
+      bool isGhostOnline = false;
+      
+      if (doc.exists && doc.data() != null) {
+        isGhostOnline = doc.data()!['ghost_hide_online'] ?? false;
+      }
+
+      if (isConnected && !isGhostOnline) {
+        // Normal User: Online dikhao
         userStatusRef.set({
           'state': 'online',
           'last_changed': ServerValue.timestamp,
         });
         userStatusRef.onDisconnect().set({
+          'state': 'offline',
+          'last_changed': ServerValue.timestamp,
+        });
+      } else {
+        // Ghost User: Hamesha Offline dikhao
+        userStatusRef.set({
           'state': 'offline',
           'last_changed': ServerValue.timestamp,
         });
@@ -43,6 +61,19 @@ class DatabaseService {
 
   Stream<DatabaseEvent> getUserStatus(String uid) {
     return _rtdb.ref('/status/$uid').onValue;
+  }
+
+  // ---------------------------------------------------
+  // 👻 GHOST SETTINGS HELPER (NEW)
+  // ---------------------------------------------------
+  Future<void> updateGhostSettings(String key, bool value) async {
+    String uid = _auth.currentUser!.uid;
+    await _firestore.collection('users').doc(uid).update({key: value});
+    
+    // Agar Online setting change hui hai, toh Presence system refresh karo
+    if (key == 'ghost_hide_online') {
+      setupPresenceSystem(); 
+    }
   }
 
   // ---------------------------------------------------
@@ -176,7 +207,6 @@ class DatabaseService {
   // 💎 PREMIUM SYSTEM (NEW)
   // ---------------------------------------------------
   
-  // Check karo user Premium hai ya nahi
   Future<bool> isUserPremium() async {
     String uid = _auth.currentUser!.uid;
     var doc = await _firestore.collection('users').doc(uid).get();
@@ -186,7 +216,6 @@ class DatabaseService {
     return false; // Default FREE user
   }
 
-  // Testing ke liye: User ko Premium banao
   Future<void> setPremiumStatus(bool status) async {
     String uid = _auth.currentUser!.uid;
     await _firestore.collection('users').doc(uid).set({'isPremium': status}, SetOptions(merge: true));
@@ -291,7 +320,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 📷 5. IMAGE SENDING
+  // 📷 5. MEDIA SENDING (Image & Audio)
   // ---------------------------------------------------
 
   Future<void> sendImageMessage(String receiverId, XFile imageFile, String receiverName, {bool isGroup = false}) async {
@@ -337,6 +366,54 @@ class DatabaseService {
       
     } catch (e) {
       print("Error uploading image: $e");
+    }
+  }
+
+  // 🎙️ VOICE NOTE SENDING LOGIC (ADDED)
+  Future<void> sendAudioMessage(String receiverId, String filePath, String receiverName, {bool isGroup = false}) async {
+    try {
+      String currentUserId = _auth.currentUser!.uid;
+      String currentUserName = _auth.currentUser!.displayName ?? "User";
+      
+      String chatId;
+      if (isGroup) {
+        chatId = receiverId;
+      } else {
+        List<String> ids = [currentUserId, receiverId];
+        ids.sort();
+        chatId = ids.join("_");
+      }
+
+      // 1. Upload Audio File
+      String fileName = "${DateTime.now().millisecondsSinceEpoch}.m4a";
+      Reference ref = _storage.ref().child('chat_audio/$chatId/$fileName');
+      File audioFile = File(filePath);
+      UploadTask uploadTask = ref.putFile(audioFile, SettableMetadata(contentType: 'audio/m4a'));
+      TaskSnapshot snapshot = await uploadTask;
+      String audioUrl = await snapshot.ref.getDownloadURL();
+
+      // 2. Save Message (Type: 'audio')
+      await _firestore.collection('chats').doc(chatId).collection('messages').add({
+        'senderId': currentUserId,
+        'senderName': currentUserName,
+        'receiverId': receiverId,
+        'text': audioUrl, 
+        'type': 'audio', 
+        'timestamp': FieldValue.serverTimestamp(),
+        'isRead': false,
+        'deletedBy': [],
+        'reactions': {},
+      });
+
+      // 3. Update Last Message
+      await _firestore.collection('chats').doc(chatId).set({
+        'lastMessage': "🎤 Voice Message",
+        'lastTime': FieldValue.serverTimestamp(),
+        if (!isGroup) 'participants': [currentUserId, receiverId],
+      }, SetOptions(merge: true));
+
+    } catch (e) {
+      print("Error sending audio: $e");
     }
   }
 
@@ -412,6 +489,17 @@ class DatabaseService {
 
   Future<void> markMessagesAsRead(String receiverId, {bool isGroup = false}) async {
     String currentUserId = _auth.currentUser!.uid;
+
+    // 👻 GHOST CHECK: Kya user ne Blue Ticks chupaye hain?
+    var userDoc = await _firestore.collection('users').doc(currentUserId).get();
+    bool isGhostSeen = false;
+    if(userDoc.exists && userDoc.data() != null) {
+       isGhostSeen = userDoc.data()!['ghost_hide_seen'] ?? false;
+    }
+
+    // Agar Ghost Seen ON hai, toh function yahin rok do. Read mark mat karo.
+    if (isGhostSeen) return; 
+
     String chatId;
     if (isGroup) {
       chatId = receiverId;
@@ -461,7 +549,7 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
-  // 👥 9. GROUP SYSTEM (WITH PREMIUM CHECK)
+  // 👥 9. GROUP SYSTEM
   // ---------------------------------------------------
 
   Stream<List<Map<String, dynamic>>> getMyFriends() {
@@ -481,14 +569,10 @@ class DatabaseService {
   }
 
   Future<void> createGroup(String groupName, XFile? groupIcon, List<String> memberIds) async {
-    // 💎 DIAMOND CHECK: Member Limit Validation
-    // Abhi limit 5 hai, premium ke liye 10000.
     bool isPremium = await isUserPremium();
     int limit = isPremium ? 10000 : 2; 
 
-    // +1 isliye kyunki Admin (main) bhi count hoga
     if ((memberIds.length + 1) > limit) {
-      // Ye error UI pakad lega aur Premium Screen dikhayega
       throw Exception("MEMBERS_LIMIT_EXCEEDED"); 
     }
 
@@ -529,14 +613,14 @@ class DatabaseService {
       'isRead': true,
     });
   }
+  
   // ---------------------------------------------------
-  // 📢 10. CHANNEL SYSTEM (Logic Added)
+  // 📢 10. CHANNEL SYSTEM
   // ---------------------------------------------------
 
   Future<void> createChannel(String name, String desc, XFile? icon) async {
     String currentUserId = _auth.currentUser!.uid;
     
-    // Channel ke liye naya document
     DocumentReference channelRef = _firestore.collection('chats').doc();
     String channelId = channelRef.id;
 
@@ -552,21 +636,20 @@ class DatabaseService {
     }
 
     await channelRef.set({
-      'isGroup': true,      // Technical language mein ye bhi group jaisa hi hai
-      'isChannel': true,    // 🟢 NEW FLAG: Ye batayega ki ye Channel hai
+      'isGroup': true,      
+      'isChannel': true,    
       'groupName': name,
       'description': desc,
       'groupIcon': photoUrl,
       'adminId': currentUserId,
-      'participants': [currentUserId], // Shuru mein sirf admin
-      'memberCount': 1,     // 🟢 Count track karne ke liye
-      'hideMembers': false, // 🟢 Privacy Setting (Default: Sabko dikhega)
+      'participants': [currentUserId], 
+      'memberCount': 1,     
+      'hideMembers': false, 
       'lastMessage': "Channel Created",
       'lastTime': FieldValue.serverTimestamp(),
       'users': {} 
     });
 
-    // Welcome Message
     await channelRef.collection('messages').add({
       'senderId': 'system',
       'text': "Channel created. Only admin can send messages.",
@@ -575,5 +658,23 @@ class DatabaseService {
       'isRead': true,
       'deletedBy': [],
     });
+  }
+
+  // ---------------------------------------------------
+  // 👑 11. ADMIN PANEL FUNCTIONS (ADDED)
+  // ---------------------------------------------------
+
+  // Saare Users ki List lao
+  Stream<QuerySnapshot> getAllUsers() {
+    return _firestore.collection('users').orderBy('timestamp', descending: true).snapshots();
+  }
+
+  // Kisi User ko Premium ya Block karna
+  Future<void> adminUpdateUser(String uid, {bool? makePremium, bool? blockUser}) async {
+    Map<String, dynamic> data = {};
+    if (makePremium != null) data['isPremium'] = makePremium;
+    if (blockUser != null) data['isBlockedByAdmin'] = blockUser;
+
+    await _firestore.collection('users').doc(uid).update(data);
   }
 }
