@@ -18,7 +18,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final DatabaseService _dbService = DatabaseService();
   final TextEditingController _nameController = TextEditingController();
   
-  List<String> _selectedUserIds = []; // Jo log select hue
+  final List<String> _selectedUserIds = []; // Jo log select hue
   XFile? _groupImage;
   bool _isLoading = false;
 

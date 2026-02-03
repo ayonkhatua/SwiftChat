@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -36,7 +35,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     if (!widget.isGroup) _checkBlockStatus();
-    _dbService.markMessagesAsRead(widget.receiverId);
+    _dbService.markMessagesAsRead(widget.receiverId, isGroup: widget.isGroup);
     
     _messageController.addListener(() {
       setState(() {
@@ -84,7 +83,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
-      await _dbService.sendImageMessage(widget.receiverId, image, widget.receiverName);
+      await _dbService.sendImageMessage(widget.receiverId, image, widget.receiverName, isGroup: widget.isGroup);
     }
   }
 

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -97,7 +96,7 @@ class DatabaseService {
   // 1. Get Access Token from JSON
   Future<String> getAccessToken() async {
     final jsonString = await rootBundle.loadString('assets/service-account.json');
-    final accountCredentials = ServiceAccountCredentials.fromJson(jsonString);
+    final accountCredentials = ServiceAccountCredentials.fromJson(jsonDecode(jsonString));
     final scopes = ['https://www.googleapis.com/auth/firebase.messaging'];
     final authClient = await clientViaServiceAccount(accountCredentials, scopes);
     return authClient.credentials.accessToken.data;
@@ -262,9 +261,6 @@ class DatabaseService {
     User? user = _auth.currentUser;
     if (user == null) return;
     String currentUserId = user.uid;
-    
-    if (receiverId.length < 30 && !receiverId.contains('_')) return;
-
     List<String> ids = [currentUserId, receiverId];
     ids.sort();
     String chatId = ids.join("_");
@@ -288,13 +284,11 @@ class DatabaseService {
   // 📷 5. IMAGE SENDING
   // ---------------------------------------------------
 
-  Future<void> sendImageMessage(String receiverId, XFile imageFile, String receiverName) async {
+  Future<void> sendImageMessage(String receiverId, XFile imageFile, String receiverName, {bool isGroup = false}) async {
     String currentUserId = _auth.currentUser!.uid;
     String currentUserName = _auth.currentUser!.displayName ?? "User";
     
     String chatId;
-    bool isGroup = receiverId.length < 30 && !receiverId.contains('_');
-
     if (isGroup) {
       chatId = receiverId;
     } else {
@@ -343,7 +337,9 @@ class DatabaseService {
   Future<void> deleteForEveryone(String receiverId, String messageId) async {
     String currentUserId = _auth.currentUser!.uid;
     String chatId;
-    if (receiverId.length < 30 && !receiverId.contains('_')) {
+    // By default treat receiverId as a user id (personal chat) and build combined chatId.
+    // If caller passes a group chatId (which will be the chat doc id), it should pass it directly.
+    if (receiverId.contains('_')) {
       chatId = receiverId;
     } else {
       List<String> ids = [currentUserId, receiverId];
@@ -356,7 +352,7 @@ class DatabaseService {
   Future<void> deleteForMe(String receiverId, String messageId) async {
     String currentUserId = _auth.currentUser!.uid;
     String chatId;
-    if (receiverId.length < 30 && !receiverId.contains('_')) {
+    if (receiverId.contains('_')) {
       chatId = receiverId;
     } else {
       List<String> ids = [currentUserId, receiverId];
@@ -406,10 +402,13 @@ class DatabaseService {
     return _firestore.collection('users').doc(_auth.currentUser!.uid).snapshots();
   }
 
-  Future<void> markMessagesAsRead(String receiverId) async {
+  Future<void> markMessagesAsRead(String receiverId, {bool isGroup = false}) async {
     String currentUserId = _auth.currentUser!.uid;
     String chatId;
-    if (receiverId.length < 30 && !receiverId.contains('_')) {
+    if (isGroup) {
+      chatId = receiverId;
+    } else if (receiverId.contains('_')) {
+      // If caller passed a combined chatId accidentally, accept it
       chatId = receiverId;
     } else {
       List<String> ids = [currentUserId, receiverId];

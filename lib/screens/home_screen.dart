@@ -146,6 +146,9 @@ class _HomeScreenState extends State<HomeScreen> {
 // ---------------------------------------------------------
 // 🟢 TAB 1: RECENT CHATS PAGE (Cleaned - No AppBar)
 // ---------------------------------------------------------
+// ---------------------------------------------------------
+// 🟢 TAB 1: RECENT CHATS PAGE (Fixed for Groups)
+// ---------------------------------------------------------
 class RecentChatsPage extends StatelessWidget {
   final DatabaseService _dbService = DatabaseService();
   final String currentUserId = FirebaseAuth.instance.currentUser!.uid;
@@ -154,8 +157,6 @@ class RecentChatsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ⚠️ NOTE: Yahan se Scaffold aur AppBar hata diya hai 
-    // kyunki ab HomeScreen ka AppBar use ho raha hai.
     return StreamBuilder<QuerySnapshot>(
       stream: _dbService.getRecentChats(),
       builder: (context, snapshot) {
@@ -189,15 +190,33 @@ class RecentChatsPage extends StatelessWidget {
         return ListView.builder(
           itemCount: docs.length,
           itemBuilder: (context, index) {
-            var data = docs[index].data() as Map<String, dynamic>;
+            var doc = docs[index];
+            var data = doc.data() as Map<String, dynamic>;
             
-            List participants = data['participants'] ?? [];
-            String receiverId = participants.firstWhere((id) => id != currentUserId, orElse: () => "");
-            if (receiverId.isEmpty) return const SizedBox();
+            // 🟢 FIX 1: Check karo ki ye Group hai ya Personal Chat
+            bool isGroup = data['isGroup'] == true;
+            
+            String name = "Unknown";
+            String? image;
+            String chatTargetId; // ChatScreen ko ye ID bhejenge
 
-            Map usersMap = data['users'] ?? {};
-            String receiverName = usersMap[receiverId] ?? "Unknown"; 
-            
+            if (isGroup) {
+              // 👉 AGAR GROUP HAI
+              name = data['groupName'] ?? "Group Chat";
+              image = data['groupIcon'];
+              chatTargetId = doc.id; // Group mein Doc ID hi Chat ID hoti hai
+            } else {
+              // 👉 AGAR PERSONAL CHAT HAI
+              List participants = data['participants'] ?? [];
+              chatTargetId = participants.firstWhere((id) => id != currentUserId, orElse: () => "");
+              if (chatTargetId.isEmpty) return const SizedBox();
+
+              Map usersMap = data['users'] ?? {};
+              name = usersMap[chatTargetId] ?? "Unknown";
+              // Personal chat ki image user profile se ayegi (abhi null rakha hai fallback ke liye)
+            }
+
+            // Message Display Logic
             String lastMsg = data['lastMessage'] ?? "";
             bool isPhoto = lastMsg == "📷 Photo" || (lastMsg.startsWith("http") && lastMsg.contains("firebasestorage"));
             String displayMsg = isPhoto ? "📷 Photo" : lastMsg;
@@ -211,37 +230,41 @@ class RecentChatsPage extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 25,
-                      backgroundColor: Colors.purpleAccent,
-                      child: Text(receiverName.isNotEmpty ? receiverName[0].toUpperCase() : "?", 
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)
-                      ),
+                      backgroundColor: isGroup ? Colors.deepPurple : Colors.purpleAccent,
+                      backgroundImage: image != null ? CachedNetworkImageProvider(image) : null,
+                      child: image == null 
+                        ? Icon(isGroup ? Icons.groups : Icons.person, color: Colors.white) 
+                        : null,
                     ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: StreamBuilder<DatabaseEvent>(
-                        stream: _dbService.getUserStatus(receiverId),
-                        builder: (context, statusSnapshot) {
-                          bool isOnline = false;
-                          if (statusSnapshot.hasData && statusSnapshot.data!.snapshot.value != null) {
-                            var statusData = statusSnapshot.data!.snapshot.value as Map;
-                            isOnline = statusData['state'] == 'online';
-                          }
-                          return Container(
-                            width: 14,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              color: isOnline ? Colors.greenAccent : Colors.grey,
-                              shape: BoxShape.circle,
-                              border: Border.all(color: Colors.black, width: 2),
-                            ),
-                          );
-                        },
+                    
+                    // 🟢 FIX 2: Online Dot sirf Personal Chat par dikhana hai
+                    if (!isGroup)
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: StreamBuilder<DatabaseEvent>(
+                          stream: _dbService.getUserStatus(chatTargetId),
+                          builder: (context, statusSnapshot) {
+                            bool isOnline = false;
+                            if (statusSnapshot.hasData && statusSnapshot.data!.snapshot.value != null) {
+                              var statusData = statusSnapshot.data!.snapshot.value as Map;
+                              isOnline = statusData['state'] == 'online';
+                            }
+                            return Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: isOnline ? Colors.greenAccent : Colors.grey,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.black, width: 2),
+                              ),
+                            );
+                          },
+                        ),
                       ),
-                    ),
                   ],
                 ),
-                title: Text(receiverName, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Text(
                   displayMsg, 
                   style: TextStyle(
@@ -252,10 +275,12 @@ class RecentChatsPage extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 onTap: () {
+                  // 🟢 FIX 3: ChatScreen par sahi ID aur Group flag bhejo
                   Navigator.push(context, MaterialPageRoute(
                     builder: (_) => ChatScreen(
-                      receiverId: receiverId, 
-                      receiverName: receiverName
+                      receiverId: chatTargetId, 
+                      receiverName: name,
+                      // isGroup: isGroup // Agar tumhara ChatScreen isGroup support karta hai to uncomment karo
                     ),
                   ));
                 },
@@ -267,7 +292,6 @@ class RecentChatsPage extends StatelessWidget {
     );
   }
 }
-
 // ---------------------------------------------------------
 // 🔍 TAB 2: SEARCH PAGE (No Changes Needed)
 // ---------------------------------------------------------
