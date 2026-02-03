@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+// import 'package:cloud_firestore/cloud_firestore.dart'; // ❌ Hata diya (Unused)
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/database_service.dart';
@@ -19,7 +20,8 @@ class ChatScreen extends StatefulWidget {
   });
 
   @override
-  _ChatScreenState createState() => _ChatScreenState();
+  // 🟢 FIX: Return type ko explicit kiya taaki warning na aaye
+  State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
@@ -35,7 +37,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     if (!widget.isGroup) _checkBlockStatus();
-    _dbService.markMessagesAsRead(widget.receiverId, isGroup: widget.isGroup);
+    _dbService.markMessagesAsRead(widget.receiverId);
     
     _messageController.addListener(() {
       setState(() {
@@ -54,7 +56,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _sendMessage() async {
-    if (_messageController.text.isEmpty) return;
+    if (_messageController.text.trim().isEmpty) return;
     
     if (!widget.isGroup) {
       bool amIBlocked = await _dbService.amIBlockedBy(widget.receiverId);
@@ -70,7 +72,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     await _dbService.sendMessage(
       widget.receiverId, 
-      _messageController.text, 
+      _messageController.text.trim(), 
       widget.receiverName,
       isGroup: widget.isGroup 
     );
@@ -83,7 +85,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
-      await _dbService.sendImageMessage(widget.receiverId, image, widget.receiverName, isGroup: widget.isGroup);
+      await _dbService.sendImageMessage(
+        widget.receiverId, 
+        image, 
+        widget.receiverName, 
+      ); 
     }
   }
 
@@ -98,29 +104,22 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.redAccent));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg), 
+      backgroundColor: Colors.redAccent
+    ));
   }
 
   void _handleMenuOption(String value) {
     switch (value) {
       case 'view_profile':
-        showDialog(context: context, builder: (_) => AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: Text(widget.receiverName, style: const TextStyle(color: Colors.white)),
-          content: const Text("Profile view logic here", style: TextStyle(color: Colors.white70)),
-        ));
+        _showSnack("Profile View Coming Soon");
         break;
       case 'wallpaper':
         _pickWallpaper();
         break;
       case 'mute':
         _showSnack("Notifications Muted");
-        break;
-      case 'export':
-        _showSnack("Chat Exported");
-        break;
-      case 'clear':
-        _showSnack("Clear chat coming soon");
         break;
       case 'block':
         _toggleBlockUser();
@@ -155,28 +154,33 @@ class _ChatScreenState extends State<ChatScreen> {
       
       appBar: AppBar(
         backgroundColor: Colors.grey[900],
-        leadingWidth: 30,
+        iconTheme: const IconThemeData(color: Colors.white),
+        leadingWidth: 40, 
+        titleSpacing: 0,
         title: Row(
           children: [
             CircleAvatar(
               radius: 18,
-              backgroundColor: Colors.purpleAccent,
+              backgroundColor: widget.isGroup ? Colors.deepPurple : Colors.purpleAccent,
               child: widget.isGroup 
-                ? const Icon(Icons.group, size: 20, color: Colors.white)
-                : Text(widget.receiverName.isNotEmpty ? widget.receiverName[0].toUpperCase() : "?", style: const TextStyle(color: Colors.white, fontSize: 14)),
+                ? const Icon(Icons.groups, size: 20, color: Colors.white)
+                : Text(widget.receiverName.isNotEmpty ? widget.receiverName[0].toUpperCase() : "?", 
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(widget.receiverName, style: const TextStyle(fontSize: 16, color: Colors.white)),
+                  Text(widget.receiverName, 
+                    style: const TextStyle(fontSize: 16, color: Colors.white, overflow: TextOverflow.ellipsis)
+                  ),
                   if (!widget.isGroup)
                     StreamBuilder<bool>(
                       stream: _dbService.getTypingStatus(widget.receiverId),
                       builder: (context, snapshot) {
                         if (snapshot.data == true) {
-                          return const Text("Typing...", style: TextStyle(fontSize: 12, color: Colors.purpleAccent));
+                          return const Text("Typing...", style: TextStyle(fontSize: 12, color: Colors.greenAccent));
                         }
                         return const SizedBox(); 
                       },
@@ -198,8 +202,7 @@ class _ChatScreenState extends State<ChatScreen> {
               const PopupMenuItem(value: 'view_profile', child: Text("View Profile", style: TextStyle(color: Colors.white))),
               const PopupMenuItem(value: 'wallpaper', child: Text("Wallpaper", style: TextStyle(color: Colors.white))),
               const PopupMenuItem(value: 'mute', child: Text("Mute Notification", style: TextStyle(color: Colors.white))),
-              const PopupMenuItem(value: 'export', child: Text("Export Chat", style: TextStyle(color: Colors.white))),
-              const PopupMenuItem(value: 'clear', child: Text("Clear Chat", style: TextStyle(color: Colors.white))),
+              
               if (!widget.isGroup)
                 PopupMenuItem(
                   value: 'block', 
@@ -212,19 +215,26 @@ class _ChatScreenState extends State<ChatScreen> {
 
       body: Container(
         decoration: _wallpaperImage != null 
-          ? BoxDecoration(image: DecorationImage(image: FileImage(File(_wallpaperImage!)), fit: BoxFit.cover))
+          ? BoxDecoration(
+              image: DecorationImage(
+                image: FileImage(File(_wallpaperImage!)), 
+                fit: BoxFit.cover,
+                colorFilter: ColorFilter.mode(Colors.black.withOpacity(0.5), BlendMode.darken) 
+              )
+            )
           : null,
         child: Column(
           children: [
             Expanded(
               child: StreamBuilder<List<Message>>(
-                // 🟢 Updated to use the corrected getMessages function
                 stream: _dbService.getMessages(widget.receiverId, isGroup: widget.isGroup),
                 builder: (context, snapshot) {
                   if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}", style: const TextStyle(color: Colors.white)));
-                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+                  if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.purpleAccent));
 
                   var messages = snapshot.data!;
+                  
+                  WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
                   return ListView.builder(
                     controller: _scrollController,
@@ -233,8 +243,10 @@ class _ChatScreenState extends State<ChatScreen> {
                       var msg = messages[index];
                       bool isMe = msg.senderId == FirebaseAuth.instance.currentUser!.uid;
                       
-                      // 🟢 FIXED TIMESTAMP ERROR HERE
+                      // 🟢 Date Logic Simplified
+                      // Hum directly toDate() call kar rahe hain kyunki Message model me Timestamp type hai
                       DateTime dt = msg.timestamp.toDate(); 
+                      
                       String timeString = "${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
 
                       return Align(
@@ -245,23 +257,43 @@ class _ChatScreenState extends State<ChatScreen> {
                           decoration: BoxDecoration(
                             color: isMe ? Colors.purpleAccent.withOpacity(0.8) : Colors.grey[800],
                             borderRadius: BorderRadius.circular(15),
+                            border: Border.all(color: Colors.white10),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // 🟢 Safe Sender Name
                               if (widget.isGroup && !isMe)
-                                Text(
-                                  msg.senderName ?? "Member",
-                                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4.0),
+                                  child: Text(
+                                    msg.senderName ?? "Member", // Null Safety handled
+                                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
                                 ),
 
                               msg.type == 'image'
-                                ? CachedNetworkImage(imageUrl: msg.text, height: 200, width: 200, fit: BoxFit.cover)
+                                ? GestureDetector(
+                                    onTap: () {},
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: CachedNetworkImage(
+                                        imageUrl: msg.text, 
+                                        height: 200, 
+                                        width: 200, 
+                                        fit: BoxFit.cover,
+                                        placeholder: (context, url) => const CircularProgressIndicator(),
+                                        errorWidget: (context, url, error) => const Icon(Icons.error),
+                                      ),
+                                    ),
+                                  )
                                 : Text(msg.text, style: const TextStyle(color: Colors.white, fontSize: 16)),
                               
                               const SizedBox(height: 5),
+                              
                               Row(
                                 mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
                                   Text(
                                     timeString, 
@@ -287,6 +319,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
 
+            // Input Area
             _isBlocked 
               ? Container(
                   padding: const EdgeInsets.all(15),
@@ -295,11 +328,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: const Text("You blocked this user. Tap menu to unblock.", style: TextStyle(color: Colors.redAccent)),
                 )
               : Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                   color: Colors.grey[900],
                   child: Row(
                     children: [
-                      IconButton(icon: const Icon(Icons.add, color: Colors.purpleAccent), onPressed: () {}),
+                      IconButton(
+                        icon: const Icon(Icons.add, color: Colors.purpleAccent), 
+                        onPressed: () {}
+                      ),
                       Expanded(
                         child: TextField(
                           controller: _messageController,

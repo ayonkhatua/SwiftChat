@@ -280,7 +280,7 @@ class RecentChatsPage extends StatelessWidget {
                     builder: (_) => ChatScreen(
                       receiverId: chatTargetId, 
                       receiverName: name,
-                      // isGroup: isGroup // Agar tumhara ChatScreen isGroup support karta hai to uncomment karo
+                       isGroup: isGroup // Agar tumhara ChatScreen isGroup support karta hai to uncomment karo
                     ),
                   ));
                 },
