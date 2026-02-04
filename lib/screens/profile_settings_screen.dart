@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
@@ -22,20 +23,94 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   
   // Edit Mode Variables
   bool _isEditing = false;
-  final TextEditingController _nameController = TextEditingController();
-  
-  void _updateProfile(String currentName) async {
-    if (_nameController.text.trim().isNotEmpty) {
-      await _dbService.updateUserProfile(_nameController.text.trim(), null);
-    }
-    setState(() => _isEditing = false);
+  bool _isUpdating = false;
+  bool? _isUsernameAvailable;
+  bool _isCheckingUsername = false;
+  Timer? _debounce;
+  int _bioLimit = 50; // Default Free Limit
+
+  @override
+  void initState() {
+    super.initState();
+    _dbService.getUserLimits().then((limits) {
+      if(mounted) setState(() => _bioLimit = limits['bioLimit']);
+    });
   }
 
-  void _pickAndUploadImage() async {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _bioController = TextEditingController();
+  
+  void _checkUsernameUniqueness(String username, String currentName) {
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+    
+    if (username.isEmpty || username == currentName) {
+      setState(() {
+        _isUsernameAvailable = null;
+        _isCheckingUsername = false;
+      });
+      return;
+    }
+
+    _debounce = Timer(const Duration(milliseconds: 500), () async {
+      setState(() => _isCheckingUsername = true);
+      final result = await FirebaseFirestore.instance
+          .collection('users')
+          .where('username', isEqualTo: username)
+          .get();
+      
+      if (mounted) {
+        setState(() {
+          _isUsernameAvailable = result.docs.isEmpty;
+          _isCheckingUsername = false;
+        });
+      }
+    });
+  }
+
+  void _updateProfile(String currentName) async {
+    String newName = _nameController.text.trim();
+    String newBio = _bioController.text.trim();
+    
+    if (newName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Username cannot be empty")));
+      return;
+    }
+
+    if (_isUsernameAvailable == false) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please choose a unique username"), backgroundColor: Colors.redAccent)
+      );
+      return;
+    }
+
+    setState(() => _isUpdating = true);
+
+    try {
+      await _dbService.updateUserProfile(newName, newBio, null);
+      if (mounted) {
+        setState(() {
+          _isEditing = false;
+          _isUpdating = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+        setState(() => _isUpdating = false);
+      }
+    }
+  }
+
+  void _pickAndUploadImage(String? oldUrl) async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Uploading image...")));
+      
+      // ☁️ Delete old image from Cloudinary if it exists
+      if (oldUrl != null && oldUrl.isNotEmpty) {
+        await CloudinaryService().deleteFile(oldUrl);
+      }
       
       // ☁️ Upload to Cloudinary
       String? url = await CloudinaryService().uploadFile(File(image.path));
@@ -43,6 +118,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       if (url != null) {
         // Update Firestore directly
         await FirebaseFirestore.instance.collection('users').doc(user!.uid).update({'profile_pic': url});
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: const Text("Profile Upload Failed"),
+            backgroundColor: Colors.redAccent,
+            action: SnackBarAction(label: "Retry", textColor: Colors.white, onPressed: () => _pickAndUploadImage(oldUrl)),
+          ));
+        }
       }
     }
   }
@@ -75,11 +158,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
                 var userData = snapshot.data!.data() as Map<String, dynamic>;
                 String name = userData['username'] ?? "User";
+                String bio = userData['bio'] ?? "Hey there! I am using SwiftChat.";
                 String email = userData['email'] ?? user?.email ?? "";
                 String? photoUrl = userData['profile_pic'];
                 bool isPremium = userData['isPremium'] == true; // 💎 Check Premium Status
 
-                if (!_isEditing) _nameController.text = name;
+                if (!_isEditing) {
+                  _nameController.text = name;
+                  _bioController.text = bio;
+                }
 
                 return SingleChildScrollView(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -92,8 +179,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
                           const Text("Profile & Settings", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                           IconButton(
-                            icon: Icon(_isEditing ? Icons.check : Icons.edit, color: Colors.purpleAccent),
-                            onPressed: () {
+                            icon: _isUpdating 
+                                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.purpleAccent, strokeWidth: 2))
+                                : Icon(_isEditing ? Icons.check : Icons.edit, color: Colors.purpleAccent),
+                            onPressed: _isUpdating ? null : () {
                               if (_isEditing) {
                                 _updateProfile(name);
                               } else {
@@ -108,7 +197,17 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
 
                       // 🟢 1. PROFILE PICTURE WITH PREMIUM GLOW
                       GestureDetector(
-                        onTap: _pickAndUploadImage,
+                        onTap: () {
+                          if (photoUrl != null) {
+                            Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => FullScreenProfileViewer(
+                                        url: photoUrl, userId: user!.uid)));
+                          } else {
+                            _pickAndUploadImage(photoUrl);
+                          }
+                        },
                         child: Stack(
                           alignment: Alignment.bottomRight,
                           children: [
@@ -144,9 +243,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       _isEditing
                         ? TextField(
                             controller: _nameController,
+                            onChanged: (val) => _checkUsernameUniqueness(val, name),
                             textAlign: TextAlign.center,
                             style: const TextStyle(color: Colors.white, fontSize: 22),
-                            decoration: const InputDecoration(border: InputBorder.none, hintText: "Enter Name", hintStyle: TextStyle(color: Colors.grey)),
+                            decoration: InputDecoration(
+                              border: InputBorder.none, 
+                              hintText: "Enter Name", 
+                              hintStyle: const TextStyle(color: Colors.grey),
+                              suffixIcon: _isCheckingUsername 
+                                ? const SizedBox(width: 20, height: 20, child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: Colors.purpleAccent)))
+                                : (_isUsernameAvailable != null 
+                                    ? Icon(
+                                        _isUsernameAvailable! ? Icons.check_circle : Icons.cancel, 
+                                        color: _isUsernameAvailable! ? Colors.green : Colors.redAccent,
+                                        size: 20,
+                                      ) 
+                                    : null),
+                            ),
                           )
                         : Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -160,6 +273,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                           ),
                       
                       Text(email, style: const TextStyle(color: Colors.grey)),
+
+                      const SizedBox(height: 15),
+
+                      // 🟢 BIO SECTION
+                      _isEditing
+                          ? TextField(
+                              controller: _bioController,
+                              textAlign: TextAlign.center,
+                              maxLength: _bioLimit, // 🟢 Enforce Limit
+                              maxLines: 2,
+                              style: const TextStyle(color: Colors.white70, fontSize: 14),
+                              decoration: const InputDecoration(border: InputBorder.none, hintText: "Enter Bio", hintStyle: TextStyle(color: Colors.grey)),
+                            )
+                          : Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 40),
+                              child: Text(bio, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                            ),
 
                       const SizedBox(height: 30),
 
@@ -253,6 +383,57 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         trailing: isLocked 
           ? const Icon(Icons.lock, color: Colors.grey, size: 20) 
           : const Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
+      ),
+    );
+  }
+}
+
+// 🟢 NEW: Full Screen Profile Viewer with Remove Option
+class FullScreenProfileViewer extends StatelessWidget {
+  final String url;
+  final String userId;
+  const FullScreenProfileViewer({super.key, required this.url, required this.userId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (value) async {
+              if (value == 'remove') {
+                // 1. Delete from Cloudinary
+                await CloudinaryService().deleteFile(url);
+                // 2. Update Firestore
+                await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(userId)
+                    .update({'profile_pic': null});
+                if (context.mounted) Navigator.pop(context);
+              } else if (value == 'change') {
+                Navigator.pop(context);
+                // Trigger image pick logic could be added here or handled in main screen
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                  value: 'remove',
+                  child: Text("Remove Profile Photo",
+                      style: TextStyle(color: Colors.redAccent))),
+            ],
+          ),
+        ],
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          child: CachedNetworkImage(
+            imageUrl: url,
+            placeholder: (context, url) => const CircularProgressIndicator(color: Colors.purpleAccent),
+          ),
+        ),
       ),
     );
   }

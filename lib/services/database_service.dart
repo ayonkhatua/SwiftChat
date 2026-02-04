@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:googleapis_auth/auth_io.dart'; 
 import 'package:flutter/services.dart'; 
 import '../models/message_model.dart';
+import 'cloudinary_service.dart';
 
 class DatabaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -99,11 +100,11 @@ class DatabaseService {
     String plan = doc.data()?['planType'] ?? "Free"; // 'Super-Premium' or 'Premium'
 
     if (plan == "Super-Premium") {
-      return {"pinLimit": 100, "bioLimit": 500, "msgLimit": 2000, "isGhost": true};
+      return {"pinLimit": 100, "bioLimit": 500, "msgLimit": 2000, "isGhost": true, "maxFileSize": 200 * 1024 * 1024};
     } else if (isPremium) {
-      return {"pinLimit": 20, "bioLimit": 100, "msgLimit": 1000, "isGhost": false};
+      return {"pinLimit": 20, "bioLimit": 100, "msgLimit": 1000, "isGhost": false, "maxFileSize": 50 * 1024 * 1024};
     } else {
-      return {"pinLimit": 5, "bioLimit": 50, "msgLimit": 500, "isGhost": false};
+      return {"pinLimit": 5, "bioLimit": 50, "msgLimit": 500, "isGhost": false, "maxFileSize": 10 * 1024 * 1024};
     }
   }
 
@@ -152,6 +153,12 @@ class DatabaseService {
     }
   }
 
+  Future<void> updateChatTheme(String chatId, String themeId) async {
+    await _firestore.collection('chats').doc(chatId).set({
+      'themeId': themeId
+    }, SetOptions(merge: true));
+  }
+
   // ❤️ REACTION HELPER
   Future<void> toggleReaction(String chatId, String messageId, String emoji) async {
     String currentUserId = _auth.currentUser!.uid;
@@ -187,6 +194,11 @@ class DatabaseService {
 
   Future<void> sendPushNotification(String receiverId, String title, String msg) async {
     try {
+      // 🟢 MUTE CHECK: Check if receiver has muted the sender
+      String currentUserId = _auth.currentUser!.uid;
+      var muteCheck = await _firestore.collection('users').doc(receiverId).collection('muted_chats').doc(currentUserId).get();
+      if (muteCheck.exists) return; // Notification muted
+
       var userDoc = await _firestore.collection('users').doc(receiverId).get();
       if (!userDoc.exists || !userDoc.data()!.containsKey('fcm_token')) {
         return;
@@ -247,12 +259,16 @@ class DatabaseService {
         .collection('chats')
         .doc(chatId)
         .collection('messages')
-        .orderBy('timestamp', descending: false)
+        .orderBy('timestamp', descending: true)
         .snapshots()
         .map((snapshot) {
       return snapshot.docs
           .map((doc) => Message.fromDocument(doc))
-          .where((msg) => !msg.deletedBy.contains(currentUserId))
+          .where((msg) {
+            // 1. Check if deleted by user
+            if (msg.deletedBy.contains(currentUserId)) return false;
+            return true;
+          })
           .toList();
     });
   }
@@ -339,6 +355,21 @@ class DatabaseService {
       if (receivedDoc.exists) return "request_received";
       return "stranger";
     });
+  }
+
+  // 🟢 Get Incoming Friend Requests
+  Stream<QuerySnapshot> getIncomingFriendRequests() {
+    String currentUserId = _auth.currentUser!.uid;
+    return _firestore.collection('users').doc(currentUserId).collection('friend_requests').snapshots();
+  }
+
+  // 🟢 Get Premium Users Showcase
+  Stream<QuerySnapshot> getPremiumUsers() {
+    return _firestore.collection('users')
+        .where('isPremium', isEqualTo: true)
+        .orderBy('timestamp', descending: true)
+        .limit(20)
+        .snapshots();
   }
 
   // ---------------------------------------------------
@@ -478,6 +509,20 @@ class DatabaseService {
       ids.sort();
       chatId = ids.join("_");
     }
+
+    // 🟢 Fetch message to check for media before deleting from Firestore
+    DocumentSnapshot doc = await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).get();
+    if (doc.exists) {
+      Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+      String type = data['type'] ?? 'text';
+      String url = data['text'] ?? '';
+      
+      // Agar message media hai, to Cloudinary se delete karo
+      if (['image', 'video', 'audio', 'document'].contains(type) && url.isNotEmpty) {
+        await CloudinaryService().deleteFile(url);
+      }
+    }
+
     await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).delete();
   }
 
@@ -495,6 +540,40 @@ class DatabaseService {
     await docRef.update({
       'deletedBy': FieldValue.arrayUnion([currentUserId])
     });
+  }
+
+  Future<void> clearChat(String receiverId, {bool isGroup = false}) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+
+    var snapshot = await _firestore.collection('chats').doc(chatId).collection('messages').get();
+    
+    WriteBatch batch = _firestore.batch();
+    int count = 0;
+    
+    for (var doc in snapshot.docs) {
+      List deletedBy = doc['deletedBy'] ?? [];
+      if (!deletedBy.contains(currentUserId)) {
+        batch.update(doc.reference, {
+          'deletedBy': FieldValue.arrayUnion([currentUserId])
+        });
+        count++;
+        
+        if (count >= 499) {
+          await batch.commit();
+          batch = _firestore.batch();
+          count = 0;
+        }
+      }
+    }
+    if (count > 0) await batch.commit();
   }
 
   Future<void> markMessagesAsRead(String receiverId, {bool isGroup = false}) async {
@@ -534,6 +613,21 @@ class DatabaseService {
   }
 
   // ---------------------------------------------------
+  // 🔔 11.5 UNREAD COUNT STREAM
+  // ---------------------------------------------------
+  Stream<int> getUnreadCount(String chatId) {
+    String currentUserId = _auth.currentUser!.uid;
+    return _firestore
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .where('receiverId', isEqualTo: currentUserId)
+        .where('isRead', isEqualTo: false)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.length);
+  }
+
+  // ---------------------------------------------------
   // 🔔 11. USER & PROFILE
   // ---------------------------------------------------
 
@@ -543,7 +637,7 @@ class DatabaseService {
     await _firestore.collection('users').doc(user.uid).set({'fcm_token': token}, SetOptions(merge: true));
   }
 
-  Future<void> updateUserProfile(String name, XFile? imageFile) async {
+  Future<void> updateUserProfile(String name, String bio, XFile? imageFile) async {
     User? user = _auth.currentUser;
     if (user == null) return;
 
@@ -558,7 +652,7 @@ class DatabaseService {
       } catch (e) { print("Profile Upload Error: $e"); }
     }
 
-    Map<String, dynamic> updateData = {'username': name};
+    Map<String, dynamic> updateData = {'username': name, 'bio': bio};
     if (photoUrl != null) updateData['profile_pic'] = photoUrl;
 
     await _firestore.collection('users').doc(user.uid).update(updateData);
@@ -719,5 +813,306 @@ class DatabaseService {
     if (makePremium != null) data['isPremium'] = makePremium;
     if (blockUser != null) data['isBlockedByAdmin'] = blockUser;
     await _firestore.collection('users').doc(uid).update(data);
+  }
+
+  // ---------------------------------------------------
+  // 📸 16. STORY SYSTEM
+  // ---------------------------------------------------
+
+  Future<int> _getTodayStoryCount() async {
+    String uid = _auth.currentUser!.uid;
+    DateTime now = DateTime.now();
+    DateTime startOfDay = DateTime(now.year, now.month, now.day);
+    
+    var snapshot = await _firestore.collection('stories')
+        .where('uid', isEqualTo: uid)
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .get();
+    
+    return snapshot.docs.length;
+  }
+
+  Future<bool> canUploadStory() async {
+    String uid = _auth.currentUser!.uid;
+    var userDoc = await _firestore.collection('users').doc(uid).get();
+    int level = userDoc.data()?['membershipLevel'] ?? 0;
+    
+    if (level > 0) return true; 
+    
+    int count = await _getTodayStoryCount();
+    return count < 5;
+  }
+
+  Future<void> uploadStory(String url, String type, {String? description, DateTime? scheduledTime}) async {
+    String uid = _auth.currentUser!.uid;
+    String username = _auth.currentUser!.displayName ?? "User";
+    
+    var userDoc = await _firestore.collection('users').doc(uid).get();
+    String? profilePic = userDoc.data()?['profile_pic'];
+
+    DateTime postTime = scheduledTime ?? DateTime.now();
+
+    await _firestore.collection('stories').add({
+      'uid': uid,
+      'username': username,
+      'profile_pic': profilePic,
+      'url': url,
+      'type': type,
+      'description': description,
+      'timestamp': Timestamp.fromDate(postTime),
+      'expiresAt': Timestamp.fromDate(postTime.add(const Duration(hours: 24))),
+    });
+  }
+
+  Stream<QuerySnapshot> getActiveStories() {
+    return _firestore.collection('stories')
+        .where('expiresAt', isGreaterThan: Timestamp.now())
+        .where('timestamp', isLessThanOrEqualTo: Timestamp.now()) // Scheduled check
+        .orderBy('timestamp', descending: true)
+        .snapshots();
+  }
+
+  // ---------------------------------------------------
+  // 🟢 17. STORY REPLY SYSTEM
+  // ---------------------------------------------------
+
+  Future<void> replyToStory(String receiverId, String text, String storyUrl, String storyId, Timestamp expiresAt) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String currentUserName = _auth.currentUser!.displayName ?? "User";
+    
+    List<String> ids = [currentUserId, receiverId];
+    ids.sort();
+    String chatId = ids.join("_");
+
+    // Fetch story owner info for context
+    var receiverDoc = await _firestore.collection('users').doc(receiverId).get();
+    String receiverName = receiverDoc.data()?['username'] ?? "User";
+    String? receiverPic = receiverDoc.data()?['profile_pic'];
+
+    // 1. Add Message to Subcollection
+    await _firestore.collection('chats').doc(chatId).collection('messages').add({
+      'senderId': currentUserId,
+      'senderName': currentUserName,
+      'receiverId': receiverId,
+      'text': text,
+      'type': 'story_reply', 
+      'timestamp': FieldValue.serverTimestamp(),
+      'deletedBy': [],
+      'isRead': false,
+      'reactions': {},
+      'storyReply': {
+        'url': storyUrl,
+        'storyId': storyId,
+        'expiresAt': expiresAt,
+        'username': receiverName,
+        'profile_pic': receiverPic,
+        'uid': receiverId,
+      }
+    });
+
+    // 2. Update Chat Document
+    await _firestore.collection('chats').doc(chatId).set({
+      'lastMessage': "Replied to story: $text",
+      'lastTime': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  // ---------------------------------------------------
+  // 🚩 18. REPORT SYSTEM
+  // ---------------------------------------------------
+
+  Future<void> reportUser(String reportedUserId, String reason) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String currentUserName = _auth.currentUser!.displayName ?? "User";
+
+    await _firestore.collection('reports').add({
+      'reporterId': currentUserId,
+      'reporterName': currentUserName,
+      'reportedUserId': reportedUserId,
+      'reason': reason,
+      'timestamp': FieldValue.serverTimestamp(),
+      'status': 'pending',
+    });
+  }
+
+  // ---------------------------------------------------
+  // 📊 19. POLL SYSTEM
+  // ---------------------------------------------------
+
+  Future<void> sendPollMessage(String receiverId, String question, List<String> options, String receiverName, {bool isGroup = false}) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String currentUserName = _auth.currentUser!.displayName ?? "User";
+    
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+
+    await _firestore.collection('chats').doc(chatId).collection('messages').add({
+      'senderId': currentUserId,
+      'senderName': currentUserName,
+      'receiverId': receiverId,
+      'text': "📊 Poll: $question",
+      'type': 'poll',
+      'timestamp': FieldValue.serverTimestamp(),
+      'deletedBy': [],
+      'isRead': false,
+      'reactions': {},
+      'pollData': {
+        'question': question,
+        'options': options,
+        'votes': {}, // Map<UserId, OptionIndex>
+      }
+    });
+
+    await _firestore.collection('chats').doc(chatId).set({
+      'lastMessage': "📊 Poll: $question",
+      'lastTime': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> voteOnPoll(String chatId, String messageId, int optionIndex) async {
+    String currentUserId = _auth.currentUser!.uid;
+    DocumentReference msgRef = _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId);
+
+    await _firestore.runTransaction((transaction) async {
+      DocumentSnapshot snapshot = await transaction.get(msgRef);
+      if (!snapshot.exists) return;
+      
+      Map<String, dynamic> data = snapshot.data() as Map<String, dynamic>;
+      Map<String, dynamic> pollData = Map<String, dynamic>.from(data['pollData'] ?? {});
+      Map<String, dynamic> votes = Map<String, dynamic>.from(pollData['votes'] ?? {});
+
+      // Toggle vote (if clicking same option, remove vote. If different, switch vote)
+      if (votes[currentUserId] == optionIndex) {
+        votes.remove(currentUserId);
+      } else {
+        votes[currentUserId] = optionIndex;
+      }
+
+      pollData['votes'] = votes;
+      transaction.update(msgRef, {'pollData': pollData});
+    });
+  }
+
+  // ---------------------------------------------------
+  // 🕒 20. SCHEDULED MESSAGES
+  // ---------------------------------------------------
+
+  Future<void> scheduleMessage(String receiverId, String text, String receiverName, DateTime scheduledTime, {bool isGroup = false}) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String currentUserName = _auth.currentUser!.displayName ?? "User";
+    
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+
+    await _firestore.collection('chats').doc(chatId).collection('scheduled_messages').add({
+      'senderId': currentUserId,
+      'senderName': currentUserName,
+      'receiverId': receiverId,
+      'text': text,
+      'type': 'text',
+      'scheduledAt': Timestamp.fromDate(scheduledTime),
+      'createdAt': FieldValue.serverTimestamp(),
+      'status': 'pending',
+    });
+  }
+
+  // 🟢 Get Scheduled Messages
+  Stream<QuerySnapshot> getScheduledMessages(String receiverId, {bool isGroup = false}) {
+    String currentUserId = _auth.currentUser!.uid;
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+
+    return _firestore.collection('chats').doc(chatId).collection('scheduled_messages')
+        .where('senderId', isEqualTo: currentUserId)
+        .where('status', isEqualTo: 'pending')
+        .orderBy('scheduledAt', descending: false)
+        .snapshots();
+  }
+
+  // 🟢 Cancel Scheduled Message
+  Future<void> cancelScheduledMessage(String receiverId, String docId, {bool isGroup = false}) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+    await _firestore.collection('chats').doc(chatId).collection('scheduled_messages').doc(docId).delete();
+  }
+
+  // ---------------------------------------------------
+  // 🎭 21. STICKER SYSTEM
+  // ---------------------------------------------------
+
+  Future<void> sendStickerMessage(String receiverId, String stickerUrl, String receiverName, {bool isGroup = false}) async {
+    String currentUserId = _auth.currentUser!.uid;
+    String currentUserName = _auth.currentUser!.displayName ?? "User";
+    
+    String chatId;
+    if (isGroup) {
+      chatId = receiverId;
+    } else {
+      List<String> ids = [currentUserId, receiverId];
+      ids.sort();
+      chatId = ids.join("_");
+    }
+
+    await _firestore.collection('chats').doc(chatId).collection('messages').add({
+      'senderId': currentUserId,
+      'senderName': currentUserName,
+      'receiverId': receiverId,
+      'text': stickerUrl,
+      'type': 'sticker',
+      'timestamp': FieldValue.serverTimestamp(),
+      'deletedBy': [],
+      'isRead': false,
+      'reactions': {},
+    });
+
+    await _firestore.collection('chats').doc(chatId).set({
+      'lastMessage': "🎭 Sticker",
+      'lastTime': FieldValue.serverTimestamp(),
+      if (!isGroup) 'participants': [currentUserId, receiverId],
+    }, SetOptions(merge: true));
+  }
+
+  // ---------------------------------------------------
+  // 🔕 22. MUTE SYSTEM
+  // ---------------------------------------------------
+
+  Future<void> muteChat(String chatId) async {
+    String currentUserId = _auth.currentUser!.uid;
+    await _firestore.collection('users').doc(currentUserId).collection('muted_chats').doc(chatId).set({});
+  }
+
+  Future<void> unmuteChat(String chatId) async {
+    String currentUserId = _auth.currentUser!.uid;
+    await _firestore.collection('users').doc(currentUserId).collection('muted_chats').doc(chatId).delete();
+  }
+
+  Stream<bool> isChatMuted(String chatId) {
+    String currentUserId = _auth.currentUser!.uid;
+    return _firestore.collection('users').doc(currentUserId).collection('muted_chats').doc(chatId).snapshots().map((doc) => doc.exists);
   }
 }

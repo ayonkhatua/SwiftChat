@@ -5,12 +5,14 @@ class ChatBubble extends StatelessWidget {
   final String text;
   final bool isMe;
   final String type; // 'text' or 'image'
+  final Gradient? gradient; // 🟢 Premium Gradient Support
 
   const ChatBubble({
     super.key, 
     required this.text, 
     required this.isMe,
     this.type = 'text',
+    this.gradient,
   });
 
   @override
@@ -25,8 +27,9 @@ class ChatBubble extends StatelessWidget {
             : const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
         
         decoration: BoxDecoration(
-          color: isMe ? Colors.purpleAccent.withOpacity(0.2) : Colors.grey[900],
-          border: Border.all(
+          gradient: (isMe && gradient != null && type == 'text') ? gradient : null,
+          color: (isMe && gradient != null) ? null : ((type == 'image' || type == 'video') ? Colors.transparent : (isMe ? Colors.purpleAccent.withOpacity(0.2) : Colors.grey[900])),
+          border: (type == 'image' || type == 'video') ? null : Border.all(
             color: isMe ? Colors.purpleAccent : Colors.grey[800]!,
             width: 1,
           ),

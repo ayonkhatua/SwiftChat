@@ -12,6 +12,9 @@ class Message {
   final bool isRead;
   final Map<String, dynamic> reactions; // 🟢 Added for Telegram Style Reactions
   final Map<String, dynamic>? replyTo;  // 🟢 Added for Reply Feature
+  final String? fileName; // 🟢 Added for Document Filename
+  final Map<String, dynamic>? storyReply; // 🟢 Added for Story Reply Context
+  final Map<String, dynamic>? pollData; // 🟢 Added for Polls
 
   Message({
     required this.messageId,
@@ -25,6 +28,9 @@ class Message {
     required this.isRead,
     this.reactions = const {}, // Default empty map
     this.replyTo,
+    this.fileName,
+    this.storyReply,
+    this.pollData,
   });
 
   // Factory to convert Firestore Document -> Message Object
@@ -43,6 +49,9 @@ class Message {
       isRead: data['isRead'] ?? false,
       reactions: data['reactions'] ?? {}, // Firestore se reactions uthao
       replyTo: data['replyTo'], // Firestore se reply data uthao
+      fileName: data['fileName'], // Firestore se filename uthao
+      storyReply: data['storyReply'], // Firestore se story reply data uthao
+      pollData: data['pollData'], // Firestore se poll data uthao
     );
   }
 }

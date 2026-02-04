@@ -1,9 +1,12 @@
 import 'dart:ui';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
 import 'chat_screen.dart';
@@ -11,7 +14,10 @@ import 'login_screen.dart';
 import 'profile_settings_screen.dart';
 import 'create_group_screen.dart';
 import 'premium_screen.dart';
+import 'profile_settings_screen.dart'; // FullScreenProfileViewer ke liye
 import 'wallet_screen.dart';
+import 'story_editor_screen.dart';
+import 'story_view_screen.dart'; // 🟢 Added for viewing stories
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -261,11 +267,92 @@ class _HomeScreenState extends State<HomeScreen> {
 // ---------------------------------------------------------
 // 🟢 TAB 1: RECENT CHATS (WITH VIP ANIMATIONS)
 // ---------------------------------------------------------
-class RecentChatsPage extends StatelessWidget {
+class RecentChatsPage extends StatefulWidget {
+  const RecentChatsPage({super.key});
+
+  @override
+  State<RecentChatsPage> createState() => _RecentChatsPageState();
+}
+
+class _RecentChatsPageState extends State<RecentChatsPage> {
   final DatabaseService _dbService = DatabaseService();
   final String currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
-  RecentChatsPage({super.key});
+  void _pickStory() async {
+    bool canUpload = await _dbService.canUploadStory();
+    if (!canUpload) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            title: const Text("Limit Reached 🛑", style: TextStyle(color: Colors.white)),
+            content: const Text("Free users can only add 5 stories per day. Upgrade to Premium for unlimited stories!", style: TextStyle(color: Colors.white70)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
+                },
+                child: const Text("Upgrade"),
+              )
+            ],
+          ),
+        );
+      }
+      return;
+    }
+
+    final ImagePicker picker = ImagePicker();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.image, color: Colors.purpleAccent),
+            title: const Text("Photo", style: TextStyle(color: Colors.white)),
+            onTap: () async {
+              Navigator.pop(context);
+              final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+              if (image != null && mounted) {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => StoryEditorScreen(file: File(image.path), type: 'image')));
+              }
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.videocam, color: Colors.pinkAccent),
+            title: const Text("Video", style: TextStyle(color: Colors.white)),
+            onTap: () async {
+              Navigator.pop(context);
+              bool isPremium = await _dbService.isUserPremium();
+              int maxSecs = isPremium ? 180 : 60;
+              final XFile? video = await picker.pickVideo(
+                source: ImageSource.gallery,
+                maxDuration: Duration(seconds: maxSecs),
+              );
+              if (video != null && mounted) {
+                // 🟢 Check duration for gallery videos
+                final VideoPlayerController tempController = VideoPlayerController.file(File(video.path));
+                await tempController.initialize();
+                if (tempController.value.duration.inSeconds > maxSecs) {
+                  tempController.dispose();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text("Video must be $maxSecs seconds or less!"), backgroundColor: Colors.redAccent)
+                  );
+                } else {
+                  tempController.dispose();
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => StoryEditorScreen(file: File(video.path), type: 'video')));
+                }
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -274,20 +361,31 @@ class RecentChatsPage extends StatelessWidget {
         // STORIES SECTION
         SizedBox(
           height: 100,
-          child: StreamBuilder<List<Map<String, dynamic>>>(
-            stream: _dbService.getMyFriends(),
+          child: StreamBuilder<QuerySnapshot>(
+            stream: _dbService.getActiveStories(),
             builder: (context, snapshot) {
-              if (!snapshot.hasData || snapshot.data!.isEmpty) return const SizedBox();
-              var friends = snapshot.data!;
+              List<Map<String, dynamic>> userStories = [];
+              if (snapshot.hasData) {
+                Map<String, Map<String, dynamic>> grouped = {};
+                for (var doc in snapshot.data!.docs) {
+                  var data = doc.data() as Map<String, dynamic>;
+                  data['id'] = doc.id; // Store Doc ID for replies
+                  String uid = data['uid'];
+                  if (!grouped.containsKey(uid)) {
+                    grouped[uid] = data;
+                  }
+                }
+                userStories = grouped.values.toList();
+              }
               
               return ListView.builder(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
-                itemCount: friends.length + 1,
+                itemCount: userStories.length + 1,
                 itemBuilder: (context, index) {
                   if (index == 0) return _buildMyStory();
-                  var friend = friends[index - 1];
-                  return _buildStoryItem(friend);
+                  var story = userStories[index - 1];
+                  return _buildStoryItem(story, userStories, index - 1);
                 },
               );
             },
@@ -319,6 +417,7 @@ class RecentChatsPage extends StatelessWidget {
                   String name = "Unknown";
                   String? image;
                   String chatTargetId; 
+                  String chatId = doc.id; // Get Chat Document ID
 
                   if (isGroup) {
                     name = data['groupName'] ?? "Group Chat";
@@ -337,7 +436,7 @@ class RecentChatsPage extends StatelessWidget {
                   String displayMsg = isPhoto ? "📷 Photo" : lastMsg;
 
                   // 🟢 FETCH TARGET USER DATA FOR VIP STYLE
-                  return StreamBuilder<DocumentSnapshot>(
+                  return StreamBuilder<DocumentSnapshot>( // 1. User Data Stream
                     stream: isGroup ? null : FirebaseFirestore.instance.collection('users').doc(chatTargetId).snapshots(),
                     builder: (context, userSnap) {
                       int membershipLevel = 0; // Default Free
@@ -348,70 +447,113 @@ class RecentChatsPage extends StatelessWidget {
                         if(!isGroup && userData['profile_pic'] != null) image = userData['profile_pic'];
                       }
 
-                      return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.05),
-                          borderRadius: BorderRadius.circular(15),
-                          border: Border.all(color: Colors.white.withOpacity(0.1)),
-                        ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
-                          leading: Stack(
-                            children: [
-                              // 💎 VIP GLOW BORDER WIDGET
-                              VIPAvatarGlow(
-                                level: membershipLevel,
-                                child: CircleAvatar(
-                                  radius: 26,
-                                  backgroundColor: isGroup ? const Color(0xFF6A11CB) : const Color(0xFF2575FC),
-                                  backgroundImage: image != null ? CachedNetworkImageProvider(image!) : null,
-                                  child: image == null 
-                                    ? Icon(isGroup ? Icons.groups : Icons.person, color: Colors.white) 
-                                    : null,
+                      //  2. UNREAD COUNT STREAM
+                      return StreamBuilder<int>(
+                        stream: _dbService.getUnreadCount(chatId),
+                        builder: (context, unreadSnapshot) {
+                          int unreadCount = unreadSnapshot.data ?? 0;
+
+                          // 🟢 3. TYPING STATUS STREAM
+                          return StreamBuilder<bool>(
+                            stream: isGroup ? Stream.value(false) : _dbService.getTypingStatus(chatTargetId),
+                            builder: (context, typingSnapshot) {
+                              bool isTyping = typingSnapshot.data ?? false;
+
+                              return Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(15),
+                                  border: Border.all(color: Colors.white.withOpacity(0.1)),
                                 ),
-                              ),
-                              
-                              // Online Status Indicator
-                              if (!isGroup)
-                                Positioned(
-                                  bottom: 0, right: 0,
-                                  child: StreamBuilder<DatabaseEvent>(
-                                    stream: _dbService.getUserStatus(chatTargetId),
-                                    builder: (context, statusSnapshot) {
-                                      bool isOnline = false;
-                                      if (statusSnapshot.hasData && statusSnapshot.data!.snapshot.value != null) {
-                                        var statusData = statusSnapshot.data!.snapshot.value as Map;
-                                        isOnline = statusData['state'] == 'online';
-                                      }
-                                      return Container(
-                                        width: 14, height: 14,
-                                        decoration: BoxDecoration(
-                                          color: isOnline ? Colors.greenAccent : Colors.grey,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(color: Colors.black, width: 2),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
+                                  leading: Stack(
+                                    children: [
+                                      GestureDetector(
+                                        onTap: () {
+                                          if (image != null) {
+                                            Navigator.push(context, MaterialPageRoute(builder: (_) => FullScreenProfileViewer(url: image!, userId: chatTargetId)));
+                                          }
+                                        },
+                                        // 💎 VIP GLOW BORDER WIDGET
+                                        child: VIPAvatarGlow(
+                                          level: membershipLevel,
+                                          child: CircleAvatar(
+                                            radius: 26,
+                                            backgroundColor: isGroup ? const Color(0xFF6A11CB) : const Color(0xFF2575FC),
+                                            backgroundImage: image != null ? CachedNetworkImageProvider(image!) : null,
+                                            child: image == null 
+                                              ? Icon(isGroup ? Icons.groups : Icons.person, color: Colors.white) 
+                                              : null,
                                         ),
-                                      );
-                                    },
+                                      ),
+                                      ),
+                                      // Online Status Indicator
+                                      if (!isGroup)
+                                        Positioned(
+                                          bottom: 0, right: 0,
+                                          child: StreamBuilder<DatabaseEvent>(
+                                            stream: _dbService.getUserStatus(chatTargetId),
+                                            builder: (context, statusSnapshot) {
+                                              bool isOnline = false;
+                                              if (statusSnapshot.hasData && statusSnapshot.data!.snapshot.value != null) {
+                                                var statusData = statusSnapshot.data!.snapshot.value as Map;
+                                                isOnline = statusData['state'] == 'online';
+                                              }
+                                              return Container(
+                                                width: 14, height: 14,
+                                                decoration: BoxDecoration(
+                                                  color: isOnline ? Colors.greenAccent : Colors.grey,
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(color: Colors.black, width: 2),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                    ],
                                   ),
+                                  
+                                  // 👑 VIP ANIMATED NAME WIDGET
+                                  title: VIPNameWidget(name: name, level: membershipLevel),
+                                  
+                                  subtitle: isTyping 
+                                    ? const Text("Typing...", style: TextStyle(color: Colors.greenAccent, fontStyle: FontStyle.italic))
+                                    : Text(
+                                        displayMsg, 
+                                        style: TextStyle(
+                                          color: unreadCount > 0 ? Colors.white : (isPhoto ? const Color(0xFF6A11CB) : Colors.white60),
+                                          fontWeight: unreadCount > 0 ? FontWeight.bold : FontWeight.normal
+                                        ),
+                                        maxLines: 1, overflow: TextOverflow.ellipsis,
+                                      ),
+                                  
+                                  // 🔴 UNREAD COUNT BADGE
+                                  trailing: unreadCount > 0 
+                                    ? Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFF6A11CB),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Text(
+                                          unreadCount.toString(),
+                                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                        ),
+                                      )
+                                    : null,
+
+                                  onTap: () {
+                                    Navigator.push(context, MaterialPageRoute(
+                                      builder: (_) => ChatScreen(receiverId: chatTargetId, receiverName: name, isGroup: isGroup),
+                                    ));
+                                  },
                                 ),
-                            ],
-                          ),
-                          
-                          // 👑 VIP ANIMATED NAME WIDGET
-                          title: VIPNameWidget(name: name, level: membershipLevel),
-                          
-                          subtitle: Text(
-                            displayMsg, 
-                            style: TextStyle(color: isPhoto ? const Color(0xFF6A11CB) : Colors.white60),
-                            maxLines: 1, overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () {
-                            Navigator.push(context, MaterialPageRoute(
-                              builder: (_) => ChatScreen(receiverId: chatTargetId, receiverName: name, isGroup: isGroup),
-                            ));
-                          },
-                        ),
+                              );
+                            }
+                          );
+                        }
                       );
                     }
                   );
@@ -425,36 +567,43 @@ class RecentChatsPage extends StatelessWidget {
   }
 
   Widget _buildMyStory() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
-      child: Column(
-        children: [
-          Stack(
-            children: [
-              const CircleAvatar(
-                radius: 30,
-                backgroundColor: Colors.grey,
-                child: Icon(Icons.person, color: Colors.white),
-              ),
-              Positioned(
-                bottom: 0, right: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: const BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle),
-                  child: const Icon(Icons.add, size: 14, color: Colors.white),
+    return GestureDetector(
+      onTap: _pickStory,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+        child: Column(
+          children: [
+            Stack(
+              children: [
+                const CircleAvatar(
+                  radius: 30,
+                  backgroundColor: Colors.grey,
+                  child: Icon(Icons.person, color: Colors.white),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          const Text("My Story", style: TextStyle(color: Colors.white70, fontSize: 11)),
-        ],
+                Positioned(
+                  bottom: 0, right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(color: Colors.blueAccent, shape: BoxShape.circle),
+                    child: const Icon(Icons.add, size: 14, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            const Text("My Story", style: TextStyle(color: Colors.white70, fontSize: 11)),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildStoryItem(Map<String, dynamic> friend) {
-    return Padding(
+  Widget _buildStoryItem(Map<String, dynamic> story, List<Map<String, dynamic>> allStories, int index) {
+    return GestureDetector(
+      onTap: () => Navigator.push(context, MaterialPageRoute(
+        builder: (_) => StoryViewScreen(stories: allStories, initialIndex: index)
+      )),
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
       child: Column(
         children: [
@@ -467,17 +616,18 @@ class RecentChatsPage extends StatelessWidget {
             child: CircleAvatar(
               radius: 28,
               backgroundColor: Colors.black,
-              backgroundImage: friend['profile_pic'] != null ? CachedNetworkImageProvider(friend['profile_pic']) : null,
-              child: friend['profile_pic'] == null ? Text(friend['username'][0].toUpperCase()) : null,
+              backgroundImage: story['profile_pic'] != null ? CachedNetworkImageProvider(story['profile_pic']) : null,
+              child: story['profile_pic'] == null ? Text(story['username'][0].toUpperCase()) : null,
             ),
           ),
           const SizedBox(height: 5),
           Text(
-            friend['username'], 
+            story['username'], 
             style: const TextStyle(color: Colors.white70, fontSize: 11),
             maxLines: 1, overflow: TextOverflow.ellipsis,
           ),
         ],
+      ),
       ),
     );
   }
@@ -529,9 +679,18 @@ class _SearchPageState extends State<SearchPage> {
       ),
       body: _isLoading 
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF6A11CB))) 
-          : (_searchResults == null || _searchResults!.docs.isEmpty)
-              ? const Center(child: Text("Find friends...", style: TextStyle(color: Colors.white54)))
-              : ListView.builder(
+          : (_searchController.text.isEmpty)
+              ? _buildDefaultView()
+              : _buildSearchResults(),
+    );
+  }
+
+  Widget _buildSearchResults() {
+    if (_searchResults == null || _searchResults!.docs.isEmpty) {
+      return const Center(child: Text("No users found", style: TextStyle(color: Colors.white54)));
+    }
+
+    return ListView.builder(
                   itemCount: _searchResults!.docs.length,
                   itemBuilder: (context, index) {
                     var data = _searchResults!.docs[index].data() as Map<String, dynamic>;
@@ -544,12 +703,19 @@ class _SearchPageState extends State<SearchPage> {
                     if (uid == FirebaseAuth.instance.currentUser!.uid) return const SizedBox(); 
 
                     return ListTile(
-                      leading: VIPAvatarGlow(
-                        level: membershipLevel,
-                        child: CircleAvatar(
-                          backgroundImage: photoUrl != null ? CachedNetworkImageProvider(photoUrl) : null,
-                          backgroundColor: Colors.grey[800],
-                          child: photoUrl == null ? const Icon(Icons.person, color: Colors.white) : null,
+                      leading: GestureDetector(
+                        onTap: () {
+                          if (photoUrl != null) {
+                            Navigator.push(context, MaterialPageRoute(builder: (_) => FullScreenProfileViewer(url: photoUrl, userId: uid)));
+                          }
+                        },
+                        child: VIPAvatarGlow(
+                          level: membershipLevel,
+                          child: CircleAvatar(
+                            backgroundImage: photoUrl != null ? CachedNetworkImageProvider(photoUrl) : null,
+                            backgroundColor: Colors.grey[800],
+                            child: photoUrl == null ? const Icon(Icons.person, color: Colors.white) : null,
+                          ),
                         ),
                       ),
                       
@@ -567,7 +733,20 @@ class _SearchPageState extends State<SearchPage> {
                                 Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(receiverId: uid, receiverName: name)));
                             });
                           }
-                          if (status == "request_sent") return const Text("Sent", style: TextStyle(color: Colors.grey));
+                          if (status == "request_sent") {
+                            return ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[800], foregroundColor: Colors.white),
+                              onPressed: () => _dbService.cancelFriendRequest(uid),
+                              child: const Text("Cancel"),
+                            );
+                          }
+                          if (status == "request_received") {
+                             return ElevatedButton(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                              onPressed: () => _dbService.acceptFriendRequest(uid),
+                              child: const Text("Accept"),
+                            );
+                          }
                           return ElevatedButton(
                             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6A11CB)),
                             onPressed: () => _dbService.sendFriendRequest(uid),
@@ -577,7 +756,97 @@ class _SearchPageState extends State<SearchPage> {
                       ),
                     );
                   },
-                ),
+                );
+  }
+
+  Widget _buildDefaultView() {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 🟢 1. FRIEND REQUESTS SECTION
+          StreamBuilder<QuerySnapshot>(
+            stream: _dbService.getIncomingFriendRequests(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const SizedBox();
+              
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    child: Text("Friend Requests", style: TextStyle(color: Colors.purpleAccent, fontWeight: FontWeight.bold, fontSize: 16)),
+                  ),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: snapshot.data!.docs.length,
+                    itemBuilder: (context, index) {
+                      String senderId = snapshot.data!.docs[index].id;
+                      return FutureBuilder<DocumentSnapshot>(
+                        future: FirebaseFirestore.instance.collection('users').doc(senderId).get(),
+                        builder: (context, userSnap) {
+                          if (!userSnap.hasData) return const SizedBox();
+                          var userData = userSnap.data!.data() as Map<String, dynamic>;
+                          return ListTile(
+                            leading: CircleAvatar(backgroundImage: CachedNetworkImageProvider(userData['profile_pic'] ?? "")),
+                            title: Text(userData['username'], style: const TextStyle(color: Colors.white)),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(icon: const Icon(Icons.check_circle, color: Colors.green, size: 30), onPressed: () => _dbService.acceptFriendRequest(senderId)),
+                                IconButton(icon: const Icon(Icons.cancel, color: Colors.red, size: 30), onPressed: () => _dbService.rejectFriendRequest(senderId)),
+                              ],
+                            ),
+                          );
+                        }
+                      );
+                    },
+                  ),
+                  const Divider(color: Colors.white12),
+                ],
+              );
+            }
+          ),
+
+          // 🟢 2. PREMIUM USERS SHOWCASE
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+            child: Text("Discover Premium Members 👑", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          StreamBuilder<QuerySnapshot>(
+            stream: _dbService.getPremiumUsers(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              var docs = snapshot.data!.docs;
+              
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.8),
+                itemCount: docs.length,
+                itemBuilder: (context, index) {
+                  var data = docs[index].data() as Map<String, dynamic>;
+                  return Column(
+                    children: [
+                      VIPAvatarGlow(
+                        level: 2, // Force Glow for showcase
+                        child: CircleAvatar(
+                          radius: 30,
+                          backgroundImage: data['profile_pic'] != null ? CachedNetworkImageProvider(data['profile_pic']) : null,
+                          child: data['profile_pic'] == null ? const Icon(Icons.person) : null,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      VIPNameWidget(name: data['username'] ?? "User", level: 2, fontSize: 12),
+                    ],
+                  );
+                },
+              );
+            }
+          ),
+        ],
+      ),
     );
   }
 }

@@ -8,7 +8,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:record/record.dart';
+import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -17,6 +21,8 @@ import '../models/message_model.dart';
 import 'wallet_screen.dart';
 import '../services/cloudinary_service.dart';
 import 'home_screen.dart'; 
+import 'story_view_screen.dart'; // 🟢 Added for viewing stories from chat
+import 'scheduled_messages_screen.dart'; // 🟢 Added for Scheduled Messages
 
 class ChatScreen extends StatefulWidget {
   final String receiverId;
@@ -39,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   final TextEditingController _messageController = TextEditingController();
   final DatabaseService _dbService = DatabaseService();
   final ScrollController _scrollController = ScrollController();
+  bool _showScrollToBottomBtn = false;
   
   // Audio State
   final AudioRecorder _audioRecorder = AudioRecorder();
@@ -50,27 +57,57 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   // UI State
   bool _isTyping = false;
   String? _wallpaperImage;
+  String _currentThemeId = 'default'; // 🟢 Chat Theme State
   bool _isBlocked = false;
+  bool _isMuted = false; // 🔕 Mute State
+
+  // 🟢 Search State
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
   
   // Reply, Edit & Highlight State
   Message? _replyMessage;
   Message? _editingMessage;
   String? _highlightedMessageId; 
+  String? _deletingMessageId; 
 
   // 🔍 Pin Scroll Logic Helper
   List<Message> _currentMessagesList = []; 
 
   int _currentPinIndex = 0; // 🟢 Added for Telegram-style Pin Looping
 
-  // 🌊 Animation Controller for Voice Wave
+  // 🎭 Sample Stickers List
+  final List<String> _stickerList = [
+    "https://cdn-icons-png.flaticon.com/512/4712/4712035.png", // Happy
+    "https://cdn-icons-png.flaticon.com/512/4712/4712009.png", // Love
+    "https://cdn-icons-png.flaticon.com/512/4712/4712109.png", // Cool
+    "https://cdn-icons-png.flaticon.com/512/4712/4712027.png", // Sad
+    "https://cdn-icons-png.flaticon.com/512/4712/4712139.png", // Angry
+    "https://cdn-icons-png.flaticon.com/512/4712/4712066.png", // Laugh
+    "https://cdn-icons-png.flaticon.com/512/1933/1933691.png", // Party
+    "https://cdn-icons-png.flaticon.com/512/742/742751.png",   // Wink
+  ];
+
+  //  Animation Controller for Voice Wave
   late AnimationController _waveController;
 
   @override
   void initState() {
     super.initState();
     if (!widget.isGroup) _checkBlockStatus();
+    _checkMuteStatus(); // 🟢 Check Mute Status
     _dbService.markMessagesAsRead(widget.receiverId);
     
+    _scrollController.addListener(() {
+      if (_scrollController.hasClients) {
+        if (_scrollController.offset > 300 && !_showScrollToBottomBtn) {
+          setState(() => _showScrollToBottomBtn = true);
+        } else if (_scrollController.offset <= 300 && _showScrollToBottomBtn) {
+          setState(() => _showScrollToBottomBtn = false);
+        }
+      }
+    });
+
     _messageController.addListener(() {
       setState(() {
         _isTyping = _messageController.text.isNotEmpty;
@@ -101,6 +138,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _waveController.dispose();
     _audioRecorder.dispose();
     _audioPlayer.dispose();
+    _searchController.dispose();
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -108,10 +146,124 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // 🟢 LOGIC FUNCTIONS
 
+  String get chatId => widget.isGroup 
+    ? widget.receiverId 
+    : (FirebaseAuth.instance.currentUser!.uid.compareTo(widget.receiverId) < 0 
+        ? "${FirebaseAuth.instance.currentUser!.uid}_${widget.receiverId}" 
+        : "${widget.receiverId}_${FirebaseAuth.instance.currentUser!.uid}");
+
   void _checkBlockStatus() {
     _dbService.isUserBlocked(widget.receiverId).listen((isBlocked) {
       if(mounted) setState(() => _isBlocked = isBlocked);
     });
+  }
+
+  void _checkMuteStatus() {
+    _dbService.isChatMuted(widget.receiverId).listen((isMuted) {
+      if(mounted) setState(() => _isMuted = isMuted);
+    });
+  }
+
+  void _toggleMute() {
+    if (_isMuted) {
+      _dbService.unmuteChat(widget.receiverId);
+      _showSnack("Notifications unmuted 🔔");
+    } else {
+      _dbService.muteChat(widget.receiverId);
+      _showSnack("Notifications muted 🔕");
+    }
+  }
+
+  void _toggleBlock() {
+    if (_isBlocked) {
+      _dbService.unblockUser(widget.receiverId);
+      _showSnack("User unblocked");
+    } else {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E),
+          title: const Text("Block User?", style: TextStyle(color: Colors.white)),
+          content: const Text("They won't be able to message you.", style: TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () {
+                Navigator.pop(context);
+                _dbService.blockUser(widget.receiverId);
+                _showSnack("User blocked");
+              },
+              child: const Text("Block"),
+            )
+          ],
+        )
+      );
+    }
+  }
+
+  void _showReportDialog() {
+    TextEditingController reasonController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text("Report User", style: TextStyle(color: Colors.redAccent)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Please provide a reason for reporting this user.", style: TextStyle(color: Colors.white70)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: reasonController,
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                hintText: "Reason (e.g., Spam, Harassment)",
+                hintStyle: TextStyle(color: Colors.grey),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () {
+              if (reasonController.text.trim().isNotEmpty) {
+                Navigator.pop(context);
+                _dbService.reportUser(widget.receiverId, reasonController.text.trim());
+                _showSnack("Report sent to Admin.");
+              }
+            },
+            child: const Text("Report"),
+          )
+        ],
+      )
+    );
+  }
+
+  void _clearChat() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text("Clear Chat?", style: TextStyle(color: Colors.white)),
+        content: const Text("This will clear all messages for you. They will remain for the other person.", style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () {
+              Navigator.pop(context);
+              _dbService.clearChat(widget.receiverId, isGroup: widget.isGroup);
+              _showSnack("Chat cleared");
+            },
+            child: const Text("Clear"),
+          )
+        ],
+      )
+    );
   }
 
   void _scrollToAndHighlight(String messageId) {
@@ -133,15 +285,70 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       );
     }
 
-    Timer(const Duration(seconds: 2), () {
+    Timer(const Duration(seconds: 1), () {
       if (mounted) setState(() => _highlightedMessageId = null);
     });
+  }
+
+  // 🗑️ PREMIUM DELETION LOGIC
+  void _confirmDeletion(Message msg, String docId) {
+    showDialog(
+      context: context,
+      builder: (context) => BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1E1E1E).withOpacity(0.9),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(25),
+            side: BorderSide(color: Colors.redAccent.withOpacity(0.3), width: 2),
+          ),
+          title: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent, size: 40),
+              ),
+              const SizedBox(height: 15),
+              const Text("Delete Message?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text(
+            "This message will be permanently removed from the database for everyone. This action is irreversible.",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          actionsAlignment: MainAxisAlignment.spaceEvenly,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Cancel", style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+              onPressed: () {
+                Navigator.pop(context);
+                setState(() => _deletingMessageId = docId);
+                Future.delayed(const Duration(milliseconds: 400), () {
+                  _dbService.deleteForEveryone(widget.receiverId, docId);
+                  if (mounted) setState(() => _deletingMessageId = null);
+                });
+              },
+              child: const Text("Delete for All", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent, 
+        0.0, 
         duration: const Duration(milliseconds: 300), 
         curve: Curves.easeOut
       );
@@ -149,28 +356,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   // 📌 SMART PIN OPTIONS
-  void _showPinOptions(Message msg) async {
-    String currentUserId = FirebaseAuth.instance.currentUser!.uid;
-    String chatId = widget.isGroup 
-        ? widget.receiverId 
-        : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
-    
-    DocumentSnapshot chatDoc = await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
-    
-    bool isAlreadyPinned = false;
-    Map<String, dynamic>? pinnedData;
-    
-    if(chatDoc.exists) {
-      List pins = chatDoc.get('pinnedMessages') ?? [];
-      var existing = pins.where((p) => p['id'] == msg.messageId);
-      if(existing.isNotEmpty) {
-        isAlreadyPinned = true;
-        pinnedData = existing.first;
-      }
-    }
-
-    if (!mounted) return;
-
+  void _showPinDurationOptions(Message msg) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -185,24 +371,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(isAlreadyPinned ? "Manage Pin" : "Pin Message For...", style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              const Text("Pin Message For...", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 20),
-              
-              if (isAlreadyPinned)
-                ListTile(
-                  leading: const Icon(Icons.push_pin_outlined, color: Colors.redAccent),
-                  title: const Text("Unpin Message", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _unpinMessage(pinnedData!);
-                  },
-                )
-              else ...[
-                _pinOptionTile("7 Days", 7, msg),
-                _pinOptionTile("15 Days", 15, msg),
-                _pinOptionTile("30 Days", 30, msg),
-                _pinOptionTile("Unlimited (Lifetime)", -1, msg, isPremium: true), // 👑 Premium
-              ],
+              _pinOptionTile("7 Days", 7, msg),
+              _pinOptionTile("15 Days", 15, msg),
+              _pinOptionTile("30 Days", 30, msg),
+              _pinOptionTile("Unlimited (Lifetime)", -1, msg, isPremium: true), // 👑 Premium
               
               const SizedBox(height: 10),
             ],
@@ -286,6 +460,73 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         ],
       )
     );
+  }
+
+  // 🎨 PREMIUM CHAT THEMES
+  void _showThemePicker() async {
+    bool isPremium = await _dbService.isUserPremium();
+    if (!isPremium) {
+      _showPremiumLockDialog();
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("Select Chat Theme 🎨", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 20),
+            Wrap(
+              spacing: 15, runSpacing: 15,
+              children: [
+                _themeOption("Default", 'default', Colors.purpleAccent, Colors.blueAccent),
+                _themeOption("Sunset", 'sunset', const Color(0xFFFF512F), const Color(0xFFDD2476)),
+                _themeOption("Ocean", 'ocean', const Color(0xFF2193b0), const Color(0xFF6dd5ed)),
+                _themeOption("Gold", 'gold', const Color(0xFFFFD700), const Color(0xFFFFC107)),
+                _themeOption("Royal", 'royal', const Color(0xFF141E30), const Color(0xFF243B55)),
+              ],
+            )
+          ],
+        ),
+      )
+    );
+  }
+
+  Widget _themeOption(String name, String id, Color c1, Color c2) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(context);
+        _dbService.updateChatTheme(chatId, id);
+      },
+      child: Column(
+        children: [
+          Container(
+            width: 50, height: 50,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(colors: [c1, c2]),
+              border: _currentThemeId == id ? Border.all(color: Colors.white, width: 2) : null
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(name, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+        ],
+      ),
+    );
+  }
+
+  Gradient? _getThemeGradient() {
+    switch (_currentThemeId) {
+      case 'sunset': return const LinearGradient(colors: [Color(0xFFFF512F), Color(0xFFDD2476)]);
+      case 'ocean': return const LinearGradient(colors: [Color(0xFF2193b0), Color(0xFF6dd5ed)]);
+      case 'gold': return const LinearGradient(colors: [Color(0xFFFFD700), Color(0xFFFFC107)]);
+      case 'royal': return const LinearGradient(colors: [Color(0xFF141E30), Color(0xFF243B55)]);
+      default: return null;
+    }
   }
 
   // 🎁 GIFT COINS LOGIC
@@ -389,7 +630,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   // ☁️ CLOUDINARY & FIRESTORE DIRECT SEND
-  Future<void> _sendMediaMessage(String url, String type) async {
+  Future<void> _sendMediaMessage(String url, String type, {String? fileName}) async {
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -407,13 +648,19 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       'timestamp': FieldValue.serverTimestamp(),
       'isRead': false,
       'reactions': {},
+      if (fileName != null) 'fileName': fileName,
     };
 
     // Add to subcollection
     await chatDoc.collection('messages').add(messageData);
 
     // Update Last Message
-    String lastMsgText = type == 'image' ? "📷 Photo" : "🎤 Voice Note";
+    String lastMsgText = "Media";
+    if (type == 'image') lastMsgText = "📷 Photo";
+    else if (type == 'video') lastMsgText = "🎥 Video";
+    else if (type == 'audio') lastMsgText = "🎤 Voice Note";
+    else if (type == 'document') lastMsgText = "📄 Document";
+
     await chatDoc.set({
       'lastMessage': lastMsgText,
       'lastMessageTime': FieldValue.serverTimestamp(),
@@ -424,6 +671,95 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     // Send Notification (Optional: relying on existing notification service triggers or manual)
     // _dbService.sendNotification(...) - Assuming DB service handles this via cloud functions or we skip for now
+  }
+
+  // 📎 ATTACHMENT MENU (WhatsApp Style)
+  void _showAttachmentMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        margin: const EdgeInsets.all(20),
+        padding: const EdgeInsets.symmetric(vertical: 25),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E),
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _attachmentItem(Icons.image, "Image", Colors.purple, _sendImage),
+            _attachmentItem(Icons.videocam, "Video", Colors.pink, _sendVideo),
+            _attachmentItem(Icons.insert_drive_file, "Document", Colors.blue, _sendDocument),
+            if (widget.isGroup) _attachmentItem(Icons.poll, "Poll", Colors.orange, _showCreatePollDialog),
+            _attachmentItem(Icons.emoji_emotions, "Sticker", Colors.teal, _showStickerPicker),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _attachmentItem(IconData icon, String label, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(context);
+        onTap();
+      },
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            height: 60, width: 60,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [color, color.withOpacity(0.7)]),
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: color.withOpacity(0.3), blurRadius: 10, spreadRadius: 2)]
+            ),
+            child: Icon(icon, color: Colors.white, size: 28),
+          ),
+          const SizedBox(height: 10),
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
+  // 🔄 RETRY SNACKBAR HELPER
+  void _showRetrySnack(String message, VoidCallback onRetry) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: Colors.redAccent,
+      action: SnackBarAction(label: "Retry", textColor: Colors.white, onPressed: onRetry),
+    ));
+  }
+
+  // 🟢 Progress Dialog Helper
+  void _showUploadProgressDialog(StreamController<double> progressStream) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StreamBuilder<double>(
+        stream: progressStream.stream,
+        initialData: 0.0,
+        builder: (context, snapshot) {
+          double progress = snapshot.data ?? 0.0;
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: const Text("Uploading...", style: TextStyle(color: Colors.white, fontSize: 18)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: progress, color: Colors.purpleAccent, backgroundColor: Colors.white10),
+                const SizedBox(height: 15),
+                Text("${(progress * 100).toStringAsFixed(0)}%", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
   // ️ RECORDING & AUDIO
@@ -441,16 +777,33 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<void> _stopAndSendRecording() async {
     final path = await _audioRecorder.stop();
     setState(() => _isRecording = false);
-    if (path != null) {
-      _showSnack("Uploading Audio...");
-      // Upload to Cloudinary (Audio treated as video resource often works best)
-      String? url = await CloudinaryService().uploadFile(File(path), isVideo: true);
-      
-      if (url != null) {
-        await _sendMediaMessage(url, 'audio');
-      } else {
-        _showSnack("Audio Upload Failed");
-      }
+    if (path != null) _performAudioUpload(File(path));
+  }
+
+  void _performAudioUpload(File file) async {
+    // 🟢 CHECK FILE SIZE LIMIT
+    int size = await file.length();
+    var limits = await _dbService.getUserLimits();
+    if (size > limits['maxFileSize']) {
+      _showSnack("File too large! Limit: ${limits['maxFileSize'] ~/ (1024*1024)}MB. Upgrade for more.");
+      return;
+    }
+
+    final StreamController<double> progressController = StreamController<double>();
+    _showUploadProgressDialog(progressController);
+
+    String? url = await CloudinaryService().uploadFile(
+      file, isVideo: true,
+      onProgress: (count, total) => progressController.add(count / total),
+    );
+    
+    progressController.close();
+    if (mounted) Navigator.pop(context);
+
+    if (url != null) {
+      await _sendMediaMessage(url, 'audio');
+    } else {
+      _showRetrySnack("Audio Upload Failed", () => _performAudioUpload(file));
     }
   }
 
@@ -468,7 +821,93 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
   }
 
-  // 📨 SEND MESSAGE
+  // 🖼️ FULL SCREEN MEDIA VIEWER
+  void _openFullScreenMedia(Message msg) {
+    Navigator.push(context, MaterialPageRoute(
+      builder: (_) => FullScreenMediaViewer(message: msg),
+    ));
+  }
+
+  // 📄 OPEN DOCUMENT
+  Future<void> _openDocument(String url) async {
+    final Uri uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      _showSnack("Could not open document");
+    }
+  }
+
+  // 🕒 SCHEDULE MESSAGE LOGIC
+  void _onSendLongPress() async {
+    if (!_isTyping) return;
+    String text = _messageController.text.trim();
+    if (text.isEmpty) return;
+
+    DateTime now = DateTime.now();
+    DateTime? pickedDate = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365)),
+      builder: (context, child) {
+        return Theme(
+          data: ThemeData.dark().copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: Color(0xFF6A11CB),
+              onPrimary: Colors.white,
+              surface: Color(0xFF1E1E1E),
+              onSurface: Colors.white,
+            ),
+            dialogBackgroundColor: const Color(0xFF1E1E1E),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (pickedDate != null && mounted) {
+      TimeOfDay? pickedTime = await showTimePicker(
+        context: context,
+        initialTime: TimeOfDay.now(),
+        builder: (context, child) {
+          return Theme(
+            data: ThemeData.dark().copyWith(
+              colorScheme: const ColorScheme.dark(
+                primary: Color(0xFF6A11CB),
+                onPrimary: Colors.white,
+                surface: Color(0xFF1E1E1E),
+                onSurface: Colors.white,
+              ),
+              timePickerTheme: TimePickerThemeData(
+                backgroundColor: const Color(0xFF1E1E1E),
+                hourMinuteTextColor: Colors.white,
+                dayPeriodTextColor: Colors.white,
+                dialHandColor: const Color(0xFF6A11CB),
+                dialBackgroundColor: Colors.grey[800],
+              )
+            ),
+            child: child!,
+          );
+        },
+      );
+
+      if (pickedTime != null && mounted) {
+        DateTime scheduledTime = DateTime(pickedDate.year, pickedDate.month, pickedDate.day, pickedTime.hour, pickedTime.minute);
+
+        if (scheduledTime.isBefore(now)) {
+          _showSnack("Please select a future time.");
+          return;
+        }
+
+        await _dbService.scheduleMessage(widget.receiverId, text, widget.receiverName, scheduledTime, isGroup: widget.isGroup);
+        _messageController.clear();
+        _showSnack("Message scheduled for ${scheduledTime.toString().substring(0, 16)} 🕒");
+      }
+    }
+  }
+
+  // � SEND MESSAGE
   void _sendMessage() async {
     String text = _messageController.text.trim();
     if (text.isEmpty) return;
@@ -501,7 +940,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         'text': _replyMessage!.type == 'image' ? "📷 Photo" : (_replyMessage!.type == 'audio' ? "🎤 Voice Note" : _replyMessage!.text),
         'sender': _replyMessage!.senderName,
         'id': _replyMessage!.messageId
-      } : null
+      } : null,
     );
 
     _messageController.clear();
@@ -512,26 +951,236 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void _sendImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-    if (image != null) {
-      _showSnack("Uploading Image...");
-      String? url = await CloudinaryService().uploadFile(File(image.path));
-      
-      if (url != null) {
-        await _sendMediaMessage(url, 'image');
+    if (image != null) _performImageUpload(File(image.path));
+  }
+
+  void _performImageUpload(File file) async {
+    // 🟢 CHECK FILE SIZE LIMIT
+    int size = await file.length();
+    var limits = await _dbService.getUserLimits();
+    if (size > limits['maxFileSize']) {
+      _showSnack("File too large! Limit: ${limits['maxFileSize'] ~/ (1024*1024)}MB");
+      return;
+    }
+
+    final StreamController<double> progressController = StreamController<double>();
+    _showUploadProgressDialog(progressController);
+
+    String? url = await CloudinaryService().uploadFile(
+      file,
+      onProgress: (count, total) => progressController.add(count / total),
+    );
+    
+    progressController.close();
+    if (mounted) Navigator.pop(context);
+
+    if (url != null) {
+      await _sendMediaMessage(url, 'image');
+    } else {
+      _showRetrySnack("Image Upload Failed", () => _performImageUpload(file));
+    }
+  }
+
+  void _sendVideo() async {
+    final ImagePicker picker = ImagePicker();
+    bool isPremium = await _dbService.isUserPremium();
+    int maxSecs = isPremium ? 180 : 60;
+
+    final XFile? video = await picker.pickVideo(
+      source: ImageSource.gallery,
+      maxDuration: Duration(seconds: maxSecs),
+    );
+    if (video != null) {
+      // 🟢 Check duration for gallery videos
+      final VideoPlayerController tempController = VideoPlayerController.file(File(video.path));
+      await tempController.initialize();
+      if (tempController.value.duration.inSeconds > maxSecs) {
+        tempController.dispose();
+        _showSnack("Video must be $maxSecs seconds or less!");
       } else {
-        _showSnack("Image Upload Failed");
+        tempController.dispose();
+        _performVideoUpload(File(video.path));
       }
     }
   }
 
-  void _toggleReaction(String docId, String emoji) async {
+  void _performVideoUpload(File file) async {
+    // 🟢 CHECK FILE SIZE LIMIT
+    int size = await file.length();
+    var limits = await _dbService.getUserLimits();
+    if (size > limits['maxFileSize']) {
+      _showSnack("File too large! Limit: ${limits['maxFileSize'] ~/ (1024*1024)}MB");
+      return;
+    }
+
+    final StreamController<double> progressController = StreamController<double>();
+    _showUploadProgressDialog(progressController);
+
+    String? url = await CloudinaryService().uploadFile(
+      file, isVideo: true,
+      onProgress: (count, total) => progressController.add(count / total),
+    );
+
+    progressController.close();
+    if (mounted) Navigator.pop(context);
+    
+    if (url != null) {
+      await _sendMediaMessage(url, 'video');
+    } else {
+      _showRetrySnack("Video Upload Failed", () => _performVideoUpload(file));
+    }
+  }
+
+  void _sendDocument() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles();
+    if (result != null && result.files.single.path != null) {
+      String fileName = result.files.single.name;
+      _performDocumentUpload(File(result.files.single.path!), fileName);
+    }
+  }
+
+  void _performDocumentUpload(File file, String fileName) async {
+    // 🟢 CHECK FILE SIZE LIMIT
+    int size = await file.length();
+    var limits = await _dbService.getUserLimits();
+    if (size > limits['maxFileSize']) {
+      _showSnack("File too large! Limit: ${limits['maxFileSize'] ~/ (1024*1024)}MB");
+      return;
+    }
+
+    final StreamController<double> progressController = StreamController<double>();
+    _showUploadProgressDialog(progressController);
+
+    String? url = await CloudinaryService().uploadFile(
+      file,
+      onProgress: (count, total) => progressController.add(count / total),
+    );
+
+    progressController.close();
+    if (mounted) Navigator.pop(context);
+    
+    if (url != null) {
+      await _sendMediaMessage(url, 'document', fileName: fileName);
+    } else {
+      _showRetrySnack("Document Upload Failed", () => _performDocumentUpload(file, fileName));
+    }
+  }
+
+  // 📊 POLL CREATION
+  void _showCreatePollDialog() {
+    TextEditingController questionController = TextEditingController();
+    List<TextEditingController> optionControllers = [TextEditingController(), TextEditingController()];
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            title: const Text("Create Poll 📊", style: TextStyle(color: Colors.white)),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: questionController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: const InputDecoration(hintText: "Ask a question...", hintStyle: TextStyle(color: Colors.grey)),
+                  ),
+                  const SizedBox(height: 15),
+                  ...List.generate(optionControllers.length, (index) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8.0),
+                      child: TextField(
+                        controller: optionControllers[index],
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          hintText: "Option ${index + 1}",
+                          hintStyle: const TextStyle(color: Colors.grey),
+                          prefixIcon: const Icon(Icons.radio_button_unchecked, color: Colors.grey, size: 16),
+                        ),
+                      ),
+                    );
+                  }),
+                  if (optionControllers.length < 5)
+                    TextButton.icon(
+                      icon: const Icon(Icons.add, color: Colors.blueAccent),
+                      label: const Text("Add Option"),
+                      onPressed: () => setDialogState(() => optionControllers.add(TextEditingController())),
+                    )
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+              ElevatedButton(
+                onPressed: () {
+                  String question = questionController.text.trim();
+                  List<String> options = optionControllers.map((c) => c.text.trim()).where((t) => t.isNotEmpty).toList();
+                  if (question.isNotEmpty && options.length >= 2) {
+                    Navigator.pop(context);
+                    _dbService.sendPollMessage(widget.receiverId, question, options, widget.receiverName, isGroup: widget.isGroup);
+                  }
+                },
+                child: const Text("Create"),
+              )
+            ],
+          );
+        }
+      )
+    );
+  }
+
+  // 🎭 STICKER PICKER
+  void _showStickerPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      builder: (context) {
+        return Container(
+          height: 300,
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            children: [
+              const Text("Send a Sticker", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Expanded(
+                child: GridView.builder(
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, crossAxisSpacing: 10, mainAxisSpacing: 10),
+                  itemCount: _stickerList.length,
+                  itemBuilder: (context, index) {
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context);
+                        _sendSticker(_stickerList[index]);
+                      },
+                      child: CachedNetworkImage(
+                        imageUrl: _stickerList[index],
+                        placeholder: (context, url) => const CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _sendSticker(String url) {
+    _dbService.sendStickerMessage(widget.receiverId, url, widget.receiverName, isGroup: widget.isGroup);
+  }
+
+  void _toggleReaction(String docId, String emoji) {
     String currentUserId = FirebaseAuth.instance.currentUser!.uid;
     String chatId = widget.isGroup 
         ? widget.receiverId 
         : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
 
-    await _dbService.toggleReaction(chatId, docId, emoji);
-    Navigator.pop(context); 
+    _dbService.toggleReaction(chatId, docId, emoji);
+    Navigator.pop(context); // Instant pop for better feel
   }
 
   void _forwardMessage(Message msg) {
@@ -578,6 +1227,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // 📱 MENU & REACTIONS
   void _showMessageOptions(Message msg, String docId) {
+    String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+    String chatId = widget.isGroup 
+        ? widget.receiverId 
+        : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
+    
     showGeneralDialog(
       context: context,
       barrierDismissible: true,
@@ -614,7 +1268,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                               GestureDetector(
                                 onTap: () {
                                   _toggleReaction(docId, e);
-                                  Navigator.pop(context);
                                 },
                                 child: Container(
                                   margin: const EdgeInsets.symmetric(horizontal: 5),
@@ -633,7 +1286,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                 margin: const EdgeInsets.only(left: 8),
                                 padding: const EdgeInsets.all(5),
                                 decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
-                                child: const Icon(Icons.add, color: Colors.white70, size: 24),
+                                  child: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white70, size: 24),
                               ),
                             )
                           ],
@@ -652,27 +1305,56 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: Colors.white12),
                       ),
-                      child: Column(
-                        children: [
-                          _buildMenuItem(Icons.reply, "Reply", () { Navigator.pop(context); setState(() => _replyMessage = msg); }),
-                          _buildMenuItem(Icons.copy, "Copy", () { Clipboard.setData(ClipboardData(text: msg.text)); Navigator.pop(context); _showSnack("Copied!"); }),
-                          _buildMenuItem(Icons.forward, "Forward", () => _forwardMessage(msg)),
-                          _buildMenuItem(Icons.push_pin, "Pin Message", () { Navigator.pop(context); _showPinOptions(msg); }), 
+                      child: FutureBuilder<DocumentSnapshot>(
+                        future: FirebaseFirestore.instance.collection('chats').doc(chatId).get(),
+                        builder: (context, snapshot) {
+                          bool isAlreadyPinned = false;
+                          Map<String, dynamic>? pinnedData;
                           
-                          if (msg.senderId == FirebaseAuth.instance.currentUser!.uid) ...[
-                            _buildMenuItem(Icons.edit, "Edit", () { 
-                              Navigator.pop(context); 
-                              setState(() { 
-                                _editingMessage = msg; 
-                                _messageController.text = msg.text; 
-                              }); 
-                            }),
-                            _buildMenuItem(Icons.delete, "Delete", () { 
-                              Navigator.pop(context); 
-                              _dbService.deleteForMe(widget.receiverId, docId); 
-                            }, isDestructive: true),
-                          ]
-                        ],
+                          if (snapshot.hasData && snapshot.data!.exists) {
+                            List pins = snapshot.data!.get('pinnedMessages') ?? [];
+                            var existing = pins.where((p) => p['id'] == msg.messageId);
+                            if (existing.isNotEmpty) {
+                              isAlreadyPinned = true;
+                              pinnedData = existing.first;
+                            }
+                          }
+
+                          return Column(
+                            children: [
+                              _buildMenuItem(Icons.reply, "Reply", () { Navigator.pop(context); setState(() => _replyMessage = msg); }),
+                              _buildMenuItem(Icons.copy, "Copy", () { Clipboard.setData(ClipboardData(text: msg.text)); Navigator.pop(context); _showSnack("Copied!"); }),
+                              _buildMenuItem(Icons.forward, "Forward", () => _forwardMessage(msg)),
+                              _buildMenuItem(
+                                isAlreadyPinned ? Icons.push_pin_outlined : Icons.push_pin, 
+                                isAlreadyPinned ? "Unpin Message" : "Pin Message", 
+                                () { 
+                                  Navigator.pop(context); 
+                                  if (isAlreadyPinned) {
+                                    _unpinMessage(pinnedData!);
+                                  } else {
+                                    _showPinDurationOptions(msg); 
+                                  }
+                                },
+                                isDestructive: isAlreadyPinned,
+                              ), 
+                              _buildMenuItem(Icons.delete_outline, "Delete", () { 
+                                Navigator.pop(context); 
+                                _confirmDeletion(msg, docId); 
+                              }, isDestructive: true),
+                              
+                              if (msg.senderId == FirebaseAuth.instance.currentUser!.uid) ...[
+                                _buildMenuItem(Icons.edit, "Edit", () { 
+                                  Navigator.pop(context); 
+                                  setState(() { 
+                                    _editingMessage = msg; 
+                                    _messageController.text = msg.text; 
+                                  }); 
+                                }),
+                              ]
+                            ],
+                          );
+                        }
                       ),
                     ),
                   ),
@@ -691,25 +1373,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text("Type an Emoji", style: TextStyle(color: Colors.white)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+        contentPadding: const EdgeInsets.symmetric(vertical: 5, horizontal: 20),
         content: TextField(
           controller: customEmojiController,
           autofocus: true,
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 30, color: Colors.white),
-          decoration: const InputDecoration(border: InputBorder.none, hintText: "😀", hintStyle: TextStyle(color: Colors.grey)),
+          decoration: const InputDecoration(
+            border: InputBorder.none, 
+            hintText: "Type emoji...", 
+            hintStyle: TextStyle(color: Colors.grey, fontSize: 14)
+          ),
+          onChanged: (val) {
+            String emoji = val.trim();
+            if (emoji.isNotEmpty) {
+              _toggleReaction(docId, emoji.characters.last);
+            }
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () { 
-              if(customEmojiController.text.isNotEmpty) {
-                _toggleReaction(docId, customEmojiController.text.characters.first); 
-                Navigator.pop(context);
-              } 
-            }, 
-            child: const Text("React", style: TextStyle(color: Colors.blueAccent))
-          )
-        ],
       )
     );
   }
@@ -765,7 +1447,36 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                      child: Row(
+                      child: _isSearching 
+                      ? Row(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.arrow_back, color: Colors.white),
+                              onPressed: () {
+                                setState(() {
+                                  _isSearching = false;
+                                  _searchController.clear();
+                                });
+                              },
+                            ),
+                            Expanded(
+                              child: TextField(
+                                controller: _searchController,
+                                style: const TextStyle(color: Colors.white),
+                                autofocus: true,
+                                decoration: const InputDecoration(
+                                  hintText: "Search...",
+                                  hintStyle: TextStyle(color: Colors.white54),
+                                  border: InputBorder.none,
+                                ),
+                                onChanged: (val) => setState(() {}),
+                              ),
+                            ),
+                            if (_searchController.text.isNotEmpty)
+                              IconButton(icon: const Icon(Icons.close, color: Colors.white), onPressed: () => setState(() => _searchController.clear())),
+                          ],
+                        )
+                      : Row(
                         children: [
                           IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
                           
@@ -838,9 +1549,32 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             color: const Color(0xFF1E1E1E),
                             itemBuilder: (context) => [
                               const PopupMenuItem(value: 'wallpaper', child: Text("Wallpaper", style: TextStyle(color: Colors.white))),
-                              const PopupMenuItem(value: 'block', child: Text("Block", style: TextStyle(color: Colors.redAccent))),
+                              PopupMenuItem(
+                                value: 'block', 
+                                child: Text(_isBlocked ? "Unblock" : "Block", style: TextStyle(color: _isBlocked ? Colors.greenAccent : Colors.redAccent))
+                              ),
+                              const PopupMenuItem(value: 'report', child: Text("Report", style: TextStyle(color: Colors.orangeAccent))),
+                              const PopupMenuItem(value: 'clear', child: Text("Clear Chat", style: TextStyle(color: Colors.redAccent))),
+                              const PopupMenuItem(value: 'theme', child: Text("Chat Theme 🎨", style: TextStyle(color: Colors.amberAccent))),
+                              const PopupMenuItem(value: 'scheduled', child: Text("Scheduled Messages 🕒", style: TextStyle(color: Colors.blueAccent))),
+                              PopupMenuItem(
+                                value: 'mute', 
+                                child: Text(_isMuted ? "Unmute Notifications" : "Mute Notifications", style: const TextStyle(color: Colors.white))
+                              ),
+                              const PopupMenuItem(value: 'search', child: Text("Search", style: TextStyle(color: Colors.white))),
                             ],
-                            onSelected: (val) => val == 'wallpaper' ? _pickWallpaper() : null,
+                            onSelected: (val) {
+                              if (val == 'wallpaper') _pickWallpaper();
+                              if (val == 'block') _toggleBlock();
+                              if (val == 'report') _showReportDialog();
+                              if (val == 'clear') _clearChat();
+                              if (val == 'theme') _showThemePicker();
+                              if (val == 'scheduled') {
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => ScheduledMessagesScreen(receiverId: widget.receiverId, receiverName: widget.receiverName, isGroup: widget.isGroup)));
+                              }
+                              if (val == 'search') setState(() => _isSearching = true);
+                              if (val == 'mute') _toggleMute();
+                            },
                           ),
                         ],
                       ),
@@ -850,8 +1584,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance.collection('chats').doc(widget.isGroup ? widget.receiverId : (FirebaseAuth.instance.currentUser!.uid.compareTo(widget.receiverId) < 0 ? "${FirebaseAuth.instance.currentUser!.uid}_${widget.receiverId}" : "${widget.receiverId}_${FirebaseAuth.instance.currentUser!.uid}")).snapshots(),
                       builder: (context, snapshot) {
-                        if(!snapshot.hasData) return const SizedBox();
+                        if(!snapshot.hasData || !snapshot.data!.exists) return const SizedBox();
                         var data = snapshot.data!.data() as Map<String, dynamic>?;
+                        
+                        // 🟢 UPDATE THEME STATE
+                        if (data != null && data.containsKey('themeId') && data['themeId'] != _currentThemeId) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) => setState(() => _currentThemeId = data['themeId']));
+                        }
+
                         List pins = [];
                         if (data != null && data.containsKey('pinnedMessages')) {
                           pins = List.from(data['pinnedMessages']);
@@ -870,74 +1610,62 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                             color: const Color(0xFF1E1E1E).withOpacity(0.9), 
                             border: const Border(bottom: BorderSide(color: Colors.white12))
                           ),
-                          child: Row(
-                            children: [
-                              // 🟢 LEFT INDICATOR: SHOWS PIN COUNT
-                              Container(
-                                width: 45,
-                                color: const Color(0xFF2575FC).withOpacity(0.2),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Icon(Icons.push_pin, color: Color(0xFF2575FC), size: 16),
-                                    Text(
-                                      "${pins.length} Pin", 
-                                      style: const TextStyle(color: Color(0xFF2575FC), fontSize: 9, fontWeight: FontWeight.bold)
-                                    )
-                                  ],
-                                ),
+                          child: GestureDetector(
+                            onTap: () {
+                              // 1. Scroll to current pin
+                              _scrollToAndHighlight(currentPin['id']);
+                              // 2. Show next pin in header (Looping)
+                              setState(() {
+                                _currentPinIndex = (_currentPinIndex + 1) % pins.length;
+                              });
+                            },
+                            onLongPress: () => _unpinMessage(currentPin),
+                            child: Row(
+                              children: [
+                                // 🟢 LEFT INDICATOR: SHOWS INDEX (e.g. 1/3)
+                                Container(
+                                  width: 45,
+                                  color: const Color(0xFF2575FC).withOpacity(0.2),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.push_pin, color: Color(0xFF2575FC), size: 16),
+                                      Text(
+                                        "${_currentPinIndex + 1}/${pins.length}", 
+                                        style: const TextStyle(color: Color(0xFF2575FC), fontSize: 9, fontWeight: FontWeight.bold)
+                                      )
+                                    ],
+                                  ),
                               ),
-                              
-                              // 🟢 RIGHT CONTENT: SCROLLABLE PINS
-                              Expanded(
-                                child: PageView.builder(
-                                  itemCount: pins.length,
-                                  scrollDirection: Axis.vertical, 
-                                  itemBuilder: (context, index) {
-                                    var pin = pins[index];
-                                    return GestureDetector(
-                                      onTap: () => _scrollToAndHighlight(pin['id']), 
-                                      onLongPress: () => _unpinMessage(pin),
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                                        alignment: Alignment.centerLeft,
-                                        child: Row(
-                                          children: [
-                                            // Vertical Line Separator
-                                            Container(width: 2, height: 25, color: Colors.white24),
-                                            const SizedBox(width: 10),
-                                            
-                                            // Pin Content
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                mainAxisAlignment: MainAxisAlignment.center,
-                                                children: [
-                                                  Text(
-                                                    "Pinned Message #${index + 1}", 
-                                                    style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)
-                                                  ),
-                                                  Text(
-                                                    pin['text'] ?? "", 
-                                                    style: const TextStyle(color: Colors.white, fontSize: 12), 
-                                                    maxLines: 1, 
-                                                    overflow: TextOverflow.ellipsis
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
+                              // 🟢 RIGHT CONTENT: SINGLE PIN DISPLAY
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                    alignment: Alignment.centerLeft,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Text(
+                                          "Pinned Message", 
+                                          style: TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)
                                         ),
-                                      ),
-                                    );
-                                  },
+                                        Text(
+                                          currentPin['text'] ?? "", 
+                                          style: const TextStyle(color: Colors.white, fontSize: 12), 
+                                          maxLines: 1, 
+                                          overflow: TextOverflow.ellipsis
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         );
                       },
-                    )
+                    ),
                   ],
                 ),
               ),
@@ -949,18 +1677,47 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.purpleAccent));
                     var messages = snapshot.data!;
-                    _currentMessagesList = messages;
+                    
+                    var displayMessages = _isSearching && _searchController.text.isNotEmpty
+                        ? messages.where((m) => m.text.toLowerCase().contains(_searchController.text.toLowerCase())).toList()
+                        : messages;
 
-                    if (_scrollController.hasClients && _scrollController.offset == _scrollController.position.maxScrollExtent) {
+                    _currentMessagesList = displayMessages;
+
+                    if (_scrollController.hasClients && _scrollController.offset < 100) {
                        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
                     }
 
-                    return ListView.builder(
-                      controller: _scrollController,
-                      itemCount: messages.length,
-                      itemBuilder: (context, index) {
-                        return _buildMessageItem(messages[index]);
-                      },
+                    return Stack(
+                      children: [
+                        ListView.builder(
+                          controller: _scrollController,
+                          reverse: true,
+                          itemCount: displayMessages.length,
+                          itemBuilder: (context, index) {
+                            // 🟢 Pass Gradient to Bubble
+                            return _buildMessageItem(displayMessages[index], _getThemeGradient());
+                          },
+                        ),
+                        if (_showScrollToBottomBtn)
+                          Positioned(
+                            bottom: 15,
+                            right: 15,
+                            child: GestureDetector(
+                              onTap: _scrollToBottom,
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1E1E1E).withOpacity(0.9),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white12),
+                                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 8)]
+                                ),
+                                child: const Icon(Icons.keyboard_arrow_down, color: Colors.purpleAccent, size: 24),
+                              ),
+                            ),
+                          ),
+                      ],
                     );
                   },
                 ),
@@ -997,7 +1754,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               ? Container(padding: const EdgeInsets.all(15), child: const Text("You blocked this user.", style: TextStyle(color: Colors.redAccent)))
               : Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: const BoxDecoration(color: Colors.black87, border: Border(top: BorderSide(color: Colors.white12))),
+                  decoration: BoxDecoration(
+                    color: Colors.black87, 
+                    border: const Border(top: BorderSide(color: Colors.white12))
+                  ),
                   child: Row(
                     children: [
                       // 🔴 LIVE RECORDING UI
@@ -1064,7 +1824,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(icon: const Icon(Icons.card_giftcard, color: Colors.amber), onPressed: _sendGift),
-                                  IconButton(icon: const Icon(Icons.camera_alt, color: Colors.grey), onPressed: _sendImage),
+                                  IconButton(icon: const Icon(Icons.attach_file, color: Colors.grey), onPressed: _showAttachmentMenu),
                                 ],
                               ),
                             ),
@@ -1073,6 +1833,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         const SizedBox(width: 5),
                         GestureDetector(
                           onTap: _isTyping ? _sendMessage : _startRecording,
+                          onLongPress: _isTyping ? _onSendLongPress : null, // 🟢 Added Long Press for Scheduling
                           child: CircleAvatar(
                             backgroundColor: _isTyping ? const Color(0xFF6A11CB) : Colors.blueAccent,
                             child: Icon(_isTyping ? Icons.send : Icons.mic, color: Colors.white, size: 20),
@@ -1089,7 +1850,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildMessageItem(Message msg) {
+  Widget _buildMessageItem(Message msg, Gradient? themeGradient) {
     bool isMe = msg.senderId == FirebaseAuth.instance.currentUser!.uid;
     DateTime dt = msg.timestamp.toDate();
     String timeString = "${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
@@ -1097,13 +1858,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     msg.reactions.forEach((key, value) => reactionCounts[value] = (reactionCounts[value] ?? 0) + 1);
 
     bool isHighlighted = _highlightedMessageId == msg.messageId;
+    bool isDeleting = _deletingMessageId == msg.messageId;
+    bool isMedia = msg.type == 'image' || msg.type == 'video' || msg.type == 'document';
+    bool isPoll = msg.type == 'poll';
+    bool isSticker = msg.type == 'sticker';
 
-    return Dismissible(
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOutBack,
+      child: isDeleting 
+      ? const SizedBox(width: double.infinity, height: 0)
+      : Dismissible(
       key: Key(msg.messageId),
       direction: DismissDirection.startToEnd,
       
       // 🟢 FIX 1: CONTROLLED SWIPE (SLIDE THRESHOLD & SNAP BACK)
-      dismissThresholds: const {DismissDirection.startToEnd: 0.15}, // Thoda kam kiya taaki jaldi trigger ho
+      dismissThresholds: const {DismissDirection.startToEnd: 0.1}, // Aur kam kiya taaki thoda sa slide karne par hi reply ho jaye
       movementDuration: const Duration(milliseconds: 100), // Fast snap back
       
       confirmDismiss: (dir) async {
@@ -1124,10 +1894,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         ),
       ),
       child: GestureDetector(
-        onTap: () => _showMessageOptions(msg, msg.messageId), 
-        child: AnimatedContainer(
+        onTap: () {
+          if (msg.type == 'document') {
+            _openDocument(msg.text);
+          } else if (isMedia) {
+            _openFullScreenMedia(msg);
+          } else {
+            _showMessageOptions(msg, msg.messageId);
+          }
+        },
+        onLongPress: () {
+          HapticFeedback.heavyImpact();
+          _showMessageOptions(msg, msg.messageId);
+        },
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 300),
+          opacity: isDeleting ? 0.0 : 1.0,
+          child: AnimatedContainer(
           duration: const Duration(milliseconds: 600),
-          color: isHighlighted ? const Color(0xFF6A11CB).withOpacity(0.4) : Colors.transparent, 
+          color: isHighlighted ? const Color(0xFF6A11CB).withOpacity(0.4) : Colors.transparent,
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
           child: Align(
             alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -1137,9 +1922,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    gradient: isMe ? const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)]) : null,
-                    color: isMe ? null : Colors.white.withOpacity(0.1),
+                    gradient: (isMe && !isMedia && !isPoll && !isSticker) ? (themeGradient ?? const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)])) : null,
+                    color: (isMedia || isSticker) ? Colors.transparent : (isMe && !isPoll ? null : const Color(0xFF2A2A2A)),
                     borderRadius: BorderRadius.only(topLeft: const Radius.circular(18), topRight: const Radius.circular(18), bottomLeft: isMe ? const Radius.circular(18) : const Radius.circular(4), bottomRight: isMe ? const Radius.circular(4) : const Radius.circular(18)),
+                    border: (isMedia || isSticker) ? null : Border.all(color: Colors.white10),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1158,19 +1944,155 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           ),
                         ),
                       
+                      // 📸 STORY REPLY CONTEXT
+                      if (msg.type == 'story_reply' && msg.storyReply != null)
+                        GestureDetector(
+                          onTap: () {
+                            bool isExpired = DateTime.now().isAfter(msg.storyReply!['expiresAt'].toDate());
+                            if (!isExpired) {
+                              Navigator.push(context, MaterialPageRoute(
+                                builder: (_) => StoryViewScreen(stories: [msg.storyReply!], initialIndex: 0)
+                              ));
+                            }
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.black26, 
+                              borderRadius: BorderRadius.circular(12), 
+                              border: const Border(left: BorderSide(color: Colors.purpleAccent, width: 3))
+                            ),
+                            child: Row(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: CachedNetworkImage(imageUrl: msg.storyReply!['url'], width: 45, height: 45, fit: BoxFit.cover),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        DateTime.now().isAfter(msg.storyReply!['expiresAt'].toDate()) ? "Expired 🛑" : "View Story 👁️",
+                                        style: TextStyle(
+                                          color: DateTime.now().isAfter(msg.storyReply!['expiresAt'].toDate()) ? Colors.redAccent : Colors.purpleAccent, 
+                                          fontSize: 12, 
+                                          fontWeight: FontWeight.bold
+                                        )
+                                      ),
+                                      const Text("Replied to story", style: TextStyle(color: Colors.white70, fontSize: 10)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      
                       if (widget.isGroup && !isMe)
                         Text(msg.senderName ?? "Member", style: TextStyle(color: Colors.purpleAccent[100], fontSize: 11, fontWeight: FontWeight.bold)),
 
                       if (msg.type == 'image') 
                         ClipRRect(borderRadius: BorderRadius.circular(10), child: CachedNetworkImage(imageUrl: msg.text, height: 200, width: 200, fit: BoxFit.cover))
+                      else if (msg.type == 'video')
+                        Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Container(
+                                width: 200, height: 200, color: Colors.white10,
+                                child: const Icon(Icons.videocam, color: Colors.white24, size: 50),
+                              ),
+                            ),
+                            const CircleAvatar(
+                              backgroundColor: Colors.black54,
+                              child: Icon(Icons.play_arrow, color: Colors.white),
+                            )
+                          ],
+                        )
+                      else if (msg.type == 'document')
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), shape: BoxShape.circle),
+                              child: const Icon(Icons.insert_drive_file, color: Colors.blueAccent, size: 24),
+                            ),
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(msg.fileName ?? "Document", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                                const Text("Tap to download/open", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              ],
+                            ),
+                          ],
+                        )
                       else if (msg.type == 'audio')
                         Container(
                           width: 150,
                           padding: const EdgeInsets.all(5),
                           child: Row(children: [GestureDetector(onTap: () => _playAudio(msg.text), child: Icon((_currentlyPlayingUrl == msg.text && _isPlaying) ? Icons.pause_circle_filled : Icons.play_circle_fill, color: Colors.white, size: 30)), const SizedBox(width: 10), Expanded(child: Container(height: 3, color: Colors.white54))]),
                         )
+                      else if (msg.type == 'poll' && msg.pollData != null)
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("📊 ${msg.pollData!['question']}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                            const SizedBox(height: 10),
+                            ...List.generate((msg.pollData!['options'] as List).length, (index) {
+                              String option = msg.pollData!['options'][index];
+                              Map votes = msg.pollData!['votes'] ?? {};
+                              int voteCount = votes.values.where((v) => v == index).length;
+                              int totalVotes = votes.length;
+                              double percent = totalVotes == 0 ? 0 : voteCount / totalVotes;
+                              bool iVoted = votes[FirebaseAuth.instance.currentUser!.uid] == index;
+
+                              return GestureDetector(
+                                onTap: () => _dbService.voteOnPoll(chatId, msg.messageId, index),
+                                child: Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                                  decoration: BoxDecoration(
+                                    color: iVoted ? Colors.blueAccent.withOpacity(0.2) : Colors.white10,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: iVoted ? Colors.blueAccent : Colors.transparent),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(option, style: const TextStyle(color: Colors.white)),
+                                          if (iVoted) const Icon(Icons.check_circle, color: Colors.blueAccent, size: 16),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 5),
+                                      LinearProgressIndicator(value: percent, color: Colors.blueAccent, backgroundColor: Colors.white10),
+                                      const SizedBox(height: 2),
+                                      Text("$voteCount votes (${(percent * 100).toStringAsFixed(0)}%)", style: const TextStyle(color: Colors.grey, fontSize: 10)),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }),
+                            Text("${(msg.pollData!['votes'] as Map).length} total votes", style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                          ],
+                        )
+                      else if (msg.type == 'sticker')
+                        CachedNetworkImage(
+                          imageUrl: msg.text,
+                          width: 120, height: 120,
+                          fit: BoxFit.contain,
+                        )
                       else 
                         Text(msg.text, style: const TextStyle(color: Colors.white, fontSize: 16)),
+
 
                       const SizedBox(height: 4),
                       
@@ -1207,6 +2129,86 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             ),
           ),
         ),
+        ),
+      ),
+    ));
+  }
+}
+
+// 🟢 NEW: Full Screen Media Viewer Widget
+class FullScreenMediaViewer extends StatefulWidget {
+  final Message message;
+  const FullScreenMediaViewer({super.key, required this.message});
+
+  @override
+  State<FullScreenMediaViewer> createState() => _FullScreenMediaViewerState();
+}
+
+class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
+  VideoPlayerController? _videoController;
+  ChewieController? _chewieController;
+  bool _isInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.message.type == 'video') {
+      _initVideo();
+    }
+  }
+
+  void _initVideo() async {
+    _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.message.text));
+    await _videoController!.initialize();
+    
+    _chewieController = ChewieController(
+      videoPlayerController: _videoController!,
+      autoPlay: true,
+      looping: false,
+      aspectRatio: _videoController!.value.aspectRatio,
+      materialProgressColors: ChewieProgressColors(
+        playedColor: const Color(0xFF6A11CB),
+        handleColor: const Color(0xFF2575FC),
+        backgroundColor: Colors.white24,
+        bufferedColor: Colors.white54,
+      ),
+      placeholder: const Center(child: CircularProgressIndicator(color: Color(0xFF6A11CB))),
+    );
+
+    setState(() => _isInitialized = true);
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    _chewieController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Text(widget.message.senderName ?? "Media", style: const TextStyle(color: Colors.white, fontSize: 16)),
+      ),
+      body: Center(
+        child: widget.message.type == 'image'
+            ? InteractiveViewer(
+                child: CachedNetworkImage(
+                  imageUrl: widget.message.text,
+                  placeholder: (context, url) => const CircularProgressIndicator(color: Color(0xFF6A11CB)),
+                  errorWidget: (context, url, error) => const Icon(Icons.error, color: Colors.red),
+                ),
+              )
+            : _isInitialized
+                ? AspectRatio(
+                    aspectRatio: _videoController!.value.aspectRatio,
+                    child: Chewie(controller: _chewieController!),
+                  )
+                : const CircularProgressIndicator(color: Color(0xFF6A11CB)),
       ),
     );
   }

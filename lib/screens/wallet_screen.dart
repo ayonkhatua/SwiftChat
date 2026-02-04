@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:ui';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -326,6 +327,7 @@ class _WalletScreenState extends State<WalletScreen> {
   void _showBuyDialog(BuildContext context, String itemName, int price) {
     File? selectedImage;
     bool isUploading = false;
+    double uploadProgress = 0.0;
     final ImagePicker picker = ImagePicker();
 
     showDialog(
@@ -440,7 +442,10 @@ class _WalletScreenState extends State<WalletScreen> {
                       if (user == null) return;
 
                       // 🟢 A. Upload Image to Cloudinary (Updated)
-                      String? downloadUrl = await CloudinaryService().uploadFile(selectedImage!);
+                      String? downloadUrl = await CloudinaryService().uploadFile(
+                        selectedImage!,
+                        onProgress: (count, total) => setState(() => uploadProgress = count / total),
+                      );
 
                       if (downloadUrl == null) {
                         throw Exception("Image upload failed");
@@ -463,11 +468,28 @@ class _WalletScreenState extends State<WalletScreen> {
                       }
                     } catch (e) {
                       setState(() => isUploading = false);
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text("Upload Failed: $e"),
+                        backgroundColor: Colors.redAccent,
+                        action: SnackBarAction(label: "Retry", textColor: Colors.white, onPressed: () => Navigator.pop(context)), // User can re-submit
+                      ));
                     }
                   },
                   child: isUploading 
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 20, height: 20, 
+                            child: CircularProgressIndicator(
+                              value: uploadProgress,
+                              color: Colors.white, strokeWidth: 2
+                            )
+                          ),
+                          const SizedBox(width: 10),
+                          Text("${(uploadProgress * 100).toStringAsFixed(0)}%"),
+                        ],
+                      )
                     : const Text("Submit Request"),
                 ),
               ],
