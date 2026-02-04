@@ -1,8 +1,8 @@
-import 'dart:ui'; // Glass effect
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart'; 
+import 'package:firebase_database/firebase_database.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
@@ -12,8 +12,7 @@ import 'edit_profile_screen.dart';
 import 'profile_settings_screen.dart';
 import 'create_group_screen.dart';
 import 'premium_screen.dart';
-import 'placeholder_screens.dart'; 
-import 'wallet_screen.dart'; // 🟢 Wallet Import
+import 'wallet_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,9 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Pages List
   final List<Widget> _pages = [
-    RecentChatsPage(),       // Tab 1: Premium Chats + Stories
-    const SearchPage(),      // Tab 2: Friends
-    const ProfilePage(),     // Tab 3: Profile
+    RecentChatsPage(),       
+    const SearchPage(),      
+    const ProfilePage(),     
   ];
 
   @override
@@ -60,14 +59,13 @@ class _HomeScreenState extends State<HomeScreen> {
       case 'group':
         Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateGroupScreen()));
         break;
+      // Note: Channel screen agar alag hai to usko import karke use karein, 
+      // abhi ke liye group screen hi rakha hai flow maintain karne ke liye.
       case 'channel':
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateChannelScreen()));
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateGroupScreen())); 
         break;
       case 'premium':
         Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
-        break;
-      case 'settings':
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
         break;
       case 'logout':
         _handleLogout();
@@ -75,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 👻 GHOST MODE PANEL
+  // 👻 GHOST MODE PANEL (Sirf Level 2 users access kar payenge UI logic ke through)
   void _showGhostPanel(BuildContext context, Map<String, dynamic> userData) {
     bool hideOnline = userData['ghost_hide_online'] ?? false;
     bool hideSeen = userData['ghost_hide_seen'] ?? false;
@@ -101,20 +99,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Icon(Icons.privacy_tip, color: Colors.purpleAccent, size: 40),
                   const SizedBox(height: 10),
                   const Text("GHOST MODE 👻", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 2)),
-                  const Text("Be invisible. Watch everything.", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const Text("Ultimate Stealth Features", style: TextStyle(color: Colors.grey, fontSize: 12)),
                   const SizedBox(height: 30),
 
-                  _buildGhostSwitch("Freeze Online Status", "You will appear offline to everyone.", hideOnline, (val) async {
+                  _buildGhostSwitch("Freeze Online Status", "Appear offline to everyone.", hideOnline, (val) async {
                     setModalState(() => hideOnline = val);
                     await _dbService.updateGhostSettings('ghost_hide_online', val);
                   }),
 
-                  _buildGhostSwitch("Ninja Seen (No Blue Tick)", "Read messages without letting them know.", hideSeen, (val) async {
+                  _buildGhostSwitch("Ninja Seen", "Read messages without blue ticks.", hideSeen, (val) async {
                     setModalState(() => hideSeen = val);
                     await _dbService.updateGhostSettings('ghost_hide_seen', val);
                   }),
 
-                  _buildGhostSwitch("Anonymous Story View", "View stories without appearing in list.", hideStoryView, (val) async {
+                  _buildGhostSwitch("Anonymous Story View", "View stories secretly.", hideStoryView, (val) async {
                     setModalState(() => hideStoryView = val);
                     await _dbService.updateGhostSettings('ghost_hide_story_view', val);
                   }),
@@ -138,7 +136,7 @@ class _HomeScreenState extends State<HomeScreen> {
         border: Border.all(color: value ? Colors.purpleAccent : Colors.transparent),
       ),
       child: SwitchListTile(
-        activeColor: Colors.purpleAccent,
+        activeThumbColor: Colors.purpleAccent,
         title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         subtitle: Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 10)),
         value: value,
@@ -151,7 +149,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-
       body: Stack(
         children: [
           // Background Blobs
@@ -189,14 +186,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     backgroundColor: Colors.transparent,
                     elevation: 0,
                     actions: [
-                      // 👻 GHOST ICON (Premium Only)
+                      // 🟢 GHOST ICON LOGIC: SIRF 599 PLAN (Level 2) WALO KO DIKHEGA
                       StreamBuilder<DocumentSnapshot>(
                         stream: FirebaseFirestore.instance.collection('users').doc(FirebaseAuth.instance.currentUser!.uid).snapshots(),
                         builder: (context, snapshot) {
                           if (!snapshot.hasData) return const SizedBox();
                           var data = snapshot.data!.data() as Map<String, dynamic>?;
-                          bool isPremium = data?['isPremium'] ?? false;
-                          if (!isPremium) return const SizedBox(); 
+                          
+                          // Check Membership Level
+                          // 0 = Free, 1 = 99 Plan, 2 = 599 Plan
+                          int membershipLevel = data?['membershipLevel'] ?? 0;
+                          
+                          // Agar Level 2 se kam hai, to icon hide kardo
+                          if (membershipLevel < 2) return const SizedBox(); 
 
                           return IconButton(
                             icon: const Icon(Icons.vpn_key_off_rounded, color: Colors.purpleAccent),
@@ -258,12 +260,7 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 // ---------------------------------------------------------
-// 🟢 TAB 1: RECENT CHATS (WITH VIP BORDER & GOLD TEXT)
-// ---------------------------------------------------------
-// ... Upar ka code same rahega ...
-
-// ---------------------------------------------------------
-// 🟢 TAB 1: RECENT CHATS (FIXED)
+// 🟢 TAB 1: RECENT CHATS (WITH VIP ANIMATIONS)
 // ---------------------------------------------------------
 class RecentChatsPage extends StatelessWidget {
   final DatabaseService _dbService = DatabaseService();
@@ -340,14 +337,15 @@ class RecentChatsPage extends StatelessWidget {
                   bool isPhoto = lastMsg == "📷 Photo" || (lastMsg.startsWith("http") && lastMsg.contains("firebasestorage"));
                   String displayMsg = isPhoto ? "📷 Photo" : lastMsg;
 
-                  // 🟢 FETCH TARGET USER DATA FOR VIP CHECK
+                  // 🟢 FETCH TARGET USER DATA FOR VIP STYLE
                   return StreamBuilder<DocumentSnapshot>(
                     stream: isGroup ? null : FirebaseFirestore.instance.collection('users').doc(chatTargetId).snapshots(),
                     builder: (context, userSnap) {
-                      bool isPremium = false;
+                      int membershipLevel = 0; // Default Free
+                      
                       if(userSnap.hasData && userSnap.data!.exists) {
                         var userData = userSnap.data!.data() as Map<String, dynamic>;
-                        isPremium = userData['isPremium'] ?? false;
+                        membershipLevel = userData['membershipLevel'] ?? 0;
                         if(!isGroup && userData['profile_pic'] != null) image = userData['profile_pic'];
                       }
 
@@ -362,16 +360,9 @@ class RecentChatsPage extends StatelessWidget {
                           contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
                           leading: Stack(
                             children: [
-                              // 💎 PREMIUM BORDER
-                              Container(
-                                padding: const EdgeInsets.all(2.5), 
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: isPremium 
-                                    ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent, Color(0xFFFFD700)]) 
-                                    : null, 
-                                  color: isPremium ? null : Colors.transparent,
-                                ),
+                              // 💎 VIP GLOW BORDER WIDGET
+                              VIPAvatarGlow(
+                                level: membershipLevel,
                                 child: CircleAvatar(
                                   radius: 26,
                                   backgroundColor: isGroup ? const Color(0xFF6A11CB) : const Color(0xFF2575FC),
@@ -381,6 +372,8 @@ class RecentChatsPage extends StatelessWidget {
                                     : null,
                                 ),
                               ),
+                              
+                              // Online Status Indicator
                               if (!isGroup)
                                 Positioned(
                                   bottom: 0, right: 0,
@@ -405,25 +398,10 @@ class RecentChatsPage extends StatelessWidget {
                                 ),
                             ],
                           ),
-                          title: Row(
-                            children: [
-                              // 👑 ANIMATED COLOR USERNAME
-                              isPremium 
-                                ? ShaderMask(
-                                    shaderCallback: (bounds) => const LinearGradient(
-                                      colors: [Color(0xFFFFD700), Color(0xFFFFE0B2), Color(0xFFFFD700)],
-                                      tileMode: TileMode.mirror,
-                                    ).createShader(bounds),
-                                    child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                                  )
-                                : Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                              
-                              if (isPremium) ...[
-                                const SizedBox(width: 5),
-                                const Icon(Icons.star_rounded, color: Color(0xFFFFD700), size: 18), 
-                              ]
-                            ],
-                          ),
+                          
+                          // 👑 VIP ANIMATED NAME WIDGET
+                          title: VIPNameWidget(name: name, level: membershipLevel),
+                          
                           subtitle: Text(
                             displayMsg, 
                             style: TextStyle(color: isPhoto ? const Color(0xFF6A11CB) : Colors.white60),
@@ -507,7 +485,7 @@ class RecentChatsPage extends StatelessWidget {
 }
 
 // ---------------------------------------------------------
-// 🟢 TAB 2: SEARCH PAGE (NOW WITH PREMIUM EFFECTS)
+// 🟢 TAB 2: SEARCH PAGE (WITH VIP ANIMATIONS)
 // ---------------------------------------------------------
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -562,42 +540,23 @@ class _SearchPageState extends State<SearchPage> {
                     String name = data['username'] ?? "Unknown";
                     String email = data['email'] ?? "";
                     String? photoUrl = data['profile_pic'];
-                    bool isPremium = data['isPremium'] ?? false; // 🟢 CHECK PREMIUM
+                    int membershipLevel = data['membershipLevel'] ?? 0;
 
                     if (uid == FirebaseAuth.instance.currentUser!.uid) return const SizedBox(); 
 
                     return ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.all(2.5),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          // 💎 PREMIUM BORDER
-                          gradient: isPremium ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent, Color(0xFFFFD700)]) : null,
-                        ),
+                      leading: VIPAvatarGlow(
+                        level: membershipLevel,
                         child: CircleAvatar(
                           backgroundImage: photoUrl != null ? CachedNetworkImageProvider(photoUrl) : null,
                           backgroundColor: Colors.grey[800],
                           child: photoUrl == null ? const Icon(Icons.person, color: Colors.white) : null,
                         ),
                       ),
-                      title: Row(
-                        children: [
-                          // 👑 ANIMATED COLOR USERNAME (SEARCH)
-                          isPremium 
-                            ? ShaderMask(
-                                shaderCallback: (bounds) => const LinearGradient(
-                                  colors: [Color(0xFFFFD700), Color(0xFFFFE0B2), Color(0xFFFFD700)],
-                                ).createShader(bounds),
-                                child: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              )
-                            : Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          
-                          if(isPremium) ...[
-                            const SizedBox(width: 5), 
-                            const Icon(Icons.star_rounded, color: Color(0xFFFFD700), size: 16)
-                          ]
-                        ],
-                      ),
+                      
+                      // 👑 VIP NAME WIDGET
+                      title: VIPNameWidget(name: name, level: membershipLevel),
+                      
                       subtitle: Text(email, style: const TextStyle(color: Colors.grey)),
                       trailing: StreamBuilder<String>(
                         stream: _dbService.getFriendshipStatus(uid),
@@ -624,6 +583,9 @@ class _SearchPageState extends State<SearchPage> {
   }
 }
 
+// ---------------------------------------------------------
+// 🟢 TAB 3: PROFILE PAGE (WITH VIP EFFECTS)
+// ---------------------------------------------------------
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
   @override
@@ -641,20 +603,15 @@ class ProfilePage extends StatelessWidget {
           var userData = snapshot.data!.data() as Map<String, dynamic>?;
           String name = userData?['username'] ?? "User";
           String? photoUrl = userData?['profile_pic'];
-          bool isPremium = userData?['isPremium'] ?? false;
+          int membershipLevel = userData?['membershipLevel'] ?? 0;
 
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // 💎 PROFILE GLOW
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    boxShadow: isPremium ? [const BoxShadow(color: Colors.purpleAccent, blurRadius: 20, spreadRadius: 5)] : [],
-                    gradient: isPremium ? const LinearGradient(colors: [Color(0xFFFFD700), Colors.purpleAccent, Color(0xFFFFD700)]) : null,
-                  ),
+                // 💎 LARGE PROFILE GLOW
+                VIPAvatarGlow(
+                  level: membershipLevel,
                   child: CircleAvatar(
                     radius: 60,
                     backgroundColor: Colors.grey[900],
@@ -662,25 +619,16 @@ class ProfilePage extends StatelessWidget {
                     child: photoUrl == null ? const Icon(Icons.person, size: 60, color: Color(0xFF6A11CB)) : null,
                   ),
                 ),
+                
                 const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // 👑 ANIMATED COLOR USERNAME (PROFILE)
-                    isPremium 
-                      ? ShaderMask(
-                          shaderCallback: (bounds) => const LinearGradient(
-                            colors: [Color(0xFFFFD700), Color(0xFFFFE0B2), Color(0xFFFFD700)],
-                          ).createShader(bounds),
-                          child: Text(name, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                        )
-                      : Text(name, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                    
-                    if(isPremium) ...[
-                      const SizedBox(width: 8), 
-                      const Icon(Icons.star_rounded, color: Color(0xFFFFD700), size: 24)
-                    ]
-                  ],
+                
+                // 👑 LARGE ANIMATED NAME
+                VIPNameWidget(name: name, level: membershipLevel, fontSize: 28),
+                
+                const SizedBox(height: 10),
+                Text(
+                  membershipLevel == 2 ? "Ultimate Plan 👑" : (membershipLevel == 1 ? "Golden Plan ⭐" : "Free Plan"),
+                  style: TextStyle(color: Colors.grey[400], fontStyle: FontStyle.italic),
                 ),
                 
                 const SizedBox(height: 20),
@@ -697,6 +645,117 @@ class ProfilePage extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+// -----------------------------------------------------------
+// 👑 VIP HELPER WIDGETS (CORE LOGIC FOR ANIMATION)
+// -----------------------------------------------------------
+
+class VIPNameWidget extends StatefulWidget {
+  final String name;
+  final int level; // 0=Free, 1=99(Gold), 2=599(Ultimate)
+  final double fontSize;
+
+  const VIPNameWidget({super.key, required this.name, required this.level, this.fontSize = 16});
+
+  @override
+  State<VIPNameWidget> createState() => _VIPNameWidgetState();
+}
+
+class _VIPNameWidgetState extends State<VIPNameWidget> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // 2 Seconds loop for shimmer
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Level 0: Normal White Text
+    if (widget.level == 0) {
+      return Text(widget.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: widget.fontSize));
+    }
+
+    // Level 1: Static Gold (99 Plan)
+    if (widget.level == 1) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ShaderMask(
+            shaderCallback: (bounds) => const LinearGradient(
+              colors: [Color(0xFFFFD700), Color(0xFFFFC107)],
+              begin: Alignment.topLeft, end: Alignment.bottomRight
+            ).createShader(bounds),
+            child: Text(widget.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: widget.fontSize)),
+          ),
+          const SizedBox(width: 5),
+          Icon(Icons.star_rounded, color: const Color(0xFFFFD700), size: widget.fontSize + 2), 
+        ],
+      );
+    }
+
+    // Level 2: Animated Reflection + Crown (599 Plan)
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            return ShaderMask(
+              shaderCallback: (bounds) {
+                return LinearGradient(
+                  colors: const [Color(0xFFFFD700), Colors.white, Color(0xFFFFD700)], // Gold -> White -> Gold
+                  stops: const [0.0, 0.5, 1.0],
+                  // Moving the gradient across the text
+                  begin: Alignment(-1.0 + (3.0 * _controller.value), -0.5), 
+                  end: Alignment(1.0 + (3.0 * _controller.value), 0.5),
+                  tileMode: TileMode.clamp,
+                ).createShader(bounds);
+              },
+              child: Text(widget.name, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: widget.fontSize)),
+            );
+          },
+        ),
+        const SizedBox(width: 5),
+        Icon(Icons.workspace_premium, color: const Color(0xFFFFD700), size: widget.fontSize + 4), // Crown Badge
+      ],
+    );
+  }
+}
+
+class VIPAvatarGlow extends StatelessWidget {
+  final int level;
+  final Widget child;
+  const VIPAvatarGlow({super.key, required this.level, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    // Free User - No Border
+    if (level == 0) return child;
+
+    // Premium Users
+    return Container(
+      padding: const EdgeInsets.all(3), // Border width
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(colors: [Color(0xFFFFD700), Color(0xFFFFA000)]), // Gold Gradient
+        // Level 2 gets Glow Shadow
+        boxShadow: level == 2 
+            ? [BoxShadow(color: Colors.orangeAccent.withOpacity(0.6), blurRadius: 15, spreadRadius: 2)] 
+            : [],
+      ),
+      child: child,
     );
   }
 }

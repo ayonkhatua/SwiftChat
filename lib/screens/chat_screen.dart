@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:ui';
-import 'dart:async'; // Timer ke liye
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -14,7 +14,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/database_service.dart';
 import '../models/message_model.dart';
-import 'wallet_screen.dart'; // 🟢 Premium Check ke liye
+import 'wallet_screen.dart';
+import 'home_screen.dart'; // 🟢 Added to use VIPNameWidget
 
 class ChatScreen extends StatefulWidget {
   final String receiverId;
@@ -32,7 +33,7 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   // 🟢 VARIABLES
   final TextEditingController _messageController = TextEditingController();
   final DatabaseService _dbService = DatabaseService();
@@ -53,7 +54,13 @@ class _ChatScreenState extends State<ChatScreen> {
   // Reply, Edit & Highlight State
   Message? _replyMessage;
   Message? _editingMessage;
-  String? _highlightedMessageId; // 🔦 Highlight Effect
+  String? _highlightedMessageId; // 🔦 Highlight Effect ID
+
+  // 🔍 Pin Scroll Logic Helper
+  List<Message> _currentMessagesList = []; 
+
+  // 🌊 Animation Controller for Voice Wave
+  late AnimationController _waveController;
 
   @override
   void initState() {
@@ -78,10 +85,17 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       }
     });
+
+    // 🌊 Initialize Wave Animation
+    _waveController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat();
   }
 
   @override
   void dispose() {
+    _waveController.dispose();
     _audioRecorder.dispose();
     _audioPlayer.dispose();
     _messageController.dispose();
@@ -97,13 +111,27 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  // 🔦 HIGHLIGHT LOGIC
+  // 🔦 TELEGRAM STYLE HIGHLIGHT & SCROLL LOGIC
   void _scrollToAndHighlight(String messageId) {
     setState(() {
       _highlightedMessageId = messageId;
     });
-    // 1 second baad highlight hata do
-    Timer(const Duration(milliseconds: 800), () {
+
+    int index = _currentMessagesList.indexWhere((m) => m.messageId == messageId);
+    if (index != -1) {
+      double offset = index * 80.0; 
+      if (offset > _scrollController.position.maxScrollExtent) {
+         offset = _scrollController.position.maxScrollExtent;
+      }
+      
+      _scrollController.animateTo(
+        offset, 
+        duration: const Duration(milliseconds: 600), 
+        curve: Curves.easeInOut
+      );
+    }
+
+    Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _highlightedMessageId = null);
     });
   }
@@ -118,8 +146,31 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  // 📌 PIN OPTIONS & LOGIC
-  void _showPinOptions(Message msg) {
+  // 📌 SMART PIN OPTIONS & LOGIC (Updated)
+  void _showPinOptions(Message msg) async {
+    // 1. Check if message is already pinned
+    String currentUserId = FirebaseAuth.instance.currentUser!.uid;
+    String chatId = widget.isGroup 
+        ? widget.receiverId 
+        : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
+    
+    DocumentSnapshot chatDoc = await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
+    
+    bool isAlreadyPinned = false;
+    Map<String, dynamic>? pinnedData;
+    
+    if(chatDoc.exists) {
+      List pins = chatDoc.get('pinnedMessages') ?? [];
+      // Find if this message ID exists in pins
+      var existing = pins.where((p) => p['id'] == msg.messageId);
+      if(existing.isNotEmpty) {
+        isAlreadyPinned = true;
+        pinnedData = existing.first;
+      }
+    }
+
+    if (!mounted) return;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -134,13 +185,24 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text("Pin Message For...", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(isAlreadyPinned ? "Manage Pin" : "Pin Message For...", style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 20),
               
-              _pinOptionTile("7 Days", 7, msg),
-              _pinOptionTile("15 Days", 15, msg),
-              _pinOptionTile("30 Days", 30, msg),
-              _pinOptionTile("Unlimited (Lifetime)", -1, msg, isPremium: true), // 👑 Premium
+              if (isAlreadyPinned)
+                ListTile(
+                  leading: const Icon(Icons.push_pin_outlined, color: Colors.redAccent),
+                  title: const Text("Unpin Message", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _unpinMessage(pinnedData!);
+                  },
+                )
+              else ...[
+                _pinOptionTile("7 Days", 7, msg),
+                _pinOptionTile("15 Days", 15, msg),
+                _pinOptionTile("30 Days", 30, msg),
+                _pinOptionTile("Unlimited (Lifetime)", -1, msg, isPremium: true), // 👑 Premium
+              ],
               
               const SizedBox(height: 10),
             ],
@@ -160,9 +222,11 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
       onTap: () async {
-        Navigator.pop(context); // Close sheet
+        Navigator.pop(context); 
         if (isPremium) {
           // 💎 Check Premium Status
+          // NOTE: Assuming User model has membershipLevel logic in DatabaseService
+          // For now using boolean check as per existing structure
           bool userIsPremium = await _dbService.isUserPremium();
           if (!userIsPremium) {
             _showPremiumLockDialog();
@@ -180,7 +244,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ? widget.receiverId 
         : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
 
-    // Calculate Expiry
     Timestamp? expiry;
     if (days != -1) {
       DateTime exDate = DateTime.now().add(Duration(days: days));
@@ -211,8 +274,8 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text("Premium Feature 👑", style: TextStyle(color: Color(0xFFFFD700))),
-        content: const Text("Unlimited Pinning is only for Premium users.", style: TextStyle(color: Colors.white70)),
+        title: const Text("VIP Feature 👑", style: TextStyle(color: Color(0xFFFFD700))),
+        content: const Text("Unlimited Pinning is for VIP users only.", style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.grey))),
           ElevatedButton(
@@ -248,11 +311,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _cancelRecording() async {
-    await _audioRecorder.stop();
-    setState(() => _isRecording = false);
-  }
-
   Future<void> _playAudio(String url) async {
     if (_currentlyPlayingUrl == url && _isPlaying) {
       await _audioPlayer.pause();
@@ -272,7 +330,6 @@ class _ChatScreenState extends State<ChatScreen> {
     String text = _messageController.text.trim();
     if (text.isEmpty) return;
     
-    // Edit Logic
     if (_editingMessage != null) {
       String currentUserId = FirebaseAuth.instance.currentUser!.uid;
       String chatId = widget.isGroup ? widget.receiverId : 
@@ -379,90 +436,100 @@ class _ChatScreenState extends State<ChatScreen> {
       transitionDuration: const Duration(milliseconds: 200),
       pageBuilder: (ctx, anim1, anim2) => Container(),
       transitionBuilder: (ctx, anim1, anim2, child) {
-        return ScaleTransition(
-          scale: CurvedAnimation(parent: anim1, curve: Curves.easeOutBack),
-          child: AlertDialog(
-            backgroundColor: Colors.transparent,
-            contentPadding: EdgeInsets.zero,
-            content: Container(
-              width: 300,
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E).withOpacity(0.95),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12),
-                boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 20, spreadRadius: 5)]
-              ),
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            ScaleTransition(
+              scale: CurvedAnimation(parent: anim1, curve: Curves.easeOutBack),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // 1. REACTIONS ROW
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black26,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                    ),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          ...["❤️", "👍", "👎", "🔥", "😂", "😢", "😡"].map((e) => 
+                  Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2A2A2A),
+                        borderRadius: BorderRadius.circular(30),
+                        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10)]
+                      ),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ...["❤️", "👍", "👎", "🔥", "😂", "😢", "😡"].map((e) => 
+                              GestureDetector(
+                                onTap: () {
+                                  _toggleReaction(docId, e);
+                                  Navigator.pop(context);
+                                },
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(horizontal: 5),
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.transparent),
+                                  child: Text(e, style: const TextStyle(fontSize: 28)),
+                                ),
+                              )
+                            ).toList(),
                             GestureDetector(
-                              onTap: () => _toggleReaction(docId, e),
+                              onTap: () {
+                                Navigator.pop(context);
+                                _showCustomReactionInput(docId);
+                              },
                               child: Container(
-                                margin: const EdgeInsets.symmetric(horizontal: 6),
+                                margin: const EdgeInsets.only(left: 8),
                                 padding: const EdgeInsets.all(5),
                                 decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white10),
-                                child: Text(e, style: const TextStyle(fontSize: 26)),
+                                child: const Icon(Icons.add, color: Colors.white70, size: 24),
                               ),
                             )
-                          ).toList(),
-                          // 🔽 DOWN ARROW
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.pop(context);
-                              _showCustomReactionInput(docId);
-                            },
-                            child: Container(
-                              margin: const EdgeInsets.only(left: 8),
-                              padding: const EdgeInsets.all(8),
-                              decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.white24),
-                              child: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 20),
-                            ),
-                          )
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                   
                   // 2. OPTIONS LIST
-                  Column(
-                    children: [
-                      _buildMenuItem(Icons.reply, "Reply", () { Navigator.pop(context); setState(() => _replyMessage = msg); }),
-                      _buildMenuItem(Icons.copy, "Copy", () { Clipboard.setData(ClipboardData(text: msg.text)); Navigator.pop(context); _showSnack("Copied!"); }),
-                      _buildMenuItem(Icons.forward, "Forward", () => _forwardMessage(msg)),
-                      // 🟢 OPEN NEW PIN DIALOG
-                      _buildMenuItem(Icons.push_pin, "Pin", () { Navigator.pop(context); _showPinOptions(msg); }), 
-                      
-                      if (msg.senderId == FirebaseAuth.instance.currentUser!.uid) ...[
-                        _buildMenuItem(Icons.edit, "Edit", () { 
-                          Navigator.pop(context); 
-                          setState(() { 
-                            _editingMessage = msg; 
-                            _messageController.text = msg.text; 
-                          }); 
-                        }),
-                        _buildMenuItem(Icons.delete, "Delete", () { 
-                          Navigator.pop(context); 
-                          _dbService.deleteForMe(widget.receiverId, docId); 
-                        }, isDestructive: true),
-                      ]
-                    ],
+                  Material(
+                    color: Colors.transparent,
+                    child: Container(
+                      width: 250,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E1E1E).withOpacity(0.95),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Column(
+                        children: [
+                          _buildMenuItem(Icons.reply, "Reply", () { Navigator.pop(context); setState(() => _replyMessage = msg); }),
+                          _buildMenuItem(Icons.copy, "Copy", () { Clipboard.setData(ClipboardData(text: msg.text)); Navigator.pop(context); _showSnack("Copied!"); }),
+                          _buildMenuItem(Icons.forward, "Forward", () => _forwardMessage(msg)),
+                          _buildMenuItem(Icons.push_pin, "Pin Message", () { Navigator.pop(context); _showPinOptions(msg); }), 
+                          
+                          if (msg.senderId == FirebaseAuth.instance.currentUser!.uid) ...[
+                            _buildMenuItem(Icons.edit, "Edit", () { 
+                              Navigator.pop(context); 
+                              setState(() { 
+                                _editingMessage = msg; 
+                                _messageController.text = msg.text; 
+                              }); 
+                            }),
+                            _buildMenuItem(Icons.delete, "Delete", () { 
+                              Navigator.pop(context); 
+                              _dbService.deleteForMe(widget.receiverId, docId); 
+                            }, isDestructive: true),
+                          ]
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
+          ],
         );
       },
     );
@@ -487,9 +554,8 @@ class _ChatScreenState extends State<ChatScreen> {
             onPressed: () { 
               if(customEmojiController.text.isNotEmpty) {
                 _toggleReaction(docId, customEmojiController.text.characters.first); 
-              } else {
                 Navigator.pop(context);
-              }
+              } 
             }, 
             child: const Text("React", style: TextStyle(color: Colors.blueAccent))
           )
@@ -535,15 +601,15 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           // BACKGROUND
           if (_wallpaperImage == null) ...[
-             Positioned(top: -100, right: -50, child: Container(height: 300, width: 300, decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF6A11CB).withOpacity(0.3), boxShadow: [BoxShadow(color: const Color(0xFF6A11CB), blurRadius: 100, spreadRadius: 20)]))),
-             Positioned(bottom: -100, left: -50, child: Container(height: 300, width: 300, decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF2575FC).withOpacity(0.3), boxShadow: [BoxShadow(color: const Color(0xFF2575FC), blurRadius: 100, spreadRadius: 20)]))),
+             Positioned(top: -100, right: -50, child: Container(height: 300, width: 300, decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF6A11CB).withOpacity(0.3), boxShadow: const [BoxShadow(color: Color(0xFF6A11CB), blurRadius: 100, spreadRadius: 20)]))),
+             Positioned(bottom: -100, left: -50, child: Container(height: 300, width: 300, decoration: BoxDecoration(shape: BoxShape.circle, color: const Color(0xFF2575FC).withOpacity(0.3), boxShadow: const [BoxShadow(color: Color(0xFF2575FC), blurRadius: 100, spreadRadius: 20)]))),
              BackdropFilter(filter: ImageFilter.blur(sigmaX: 50, sigmaY: 50), child: Container(color: Colors.black.withOpacity(0.4))),
           ] else 
              Positioned.fill(child: Image.file(File(_wallpaperImage!), fit: BoxFit.cover, color: Colors.black.withOpacity(0.6), colorBlendMode: BlendMode.darken)),
 
           Column(
             children: [
-              // 🟢 APP BAR WITH MULTIPLE PINNED MESSAGES (CAROUSEL)
+              // 🟢 APP BAR WITH VIP HEADER
               SafeArea(
                 child: Column(
                   children: [
@@ -552,32 +618,71 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Row(
                         children: [
                           IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.pop(context)),
-                          CircleAvatar(
-                            radius: 20,
-                            backgroundColor: widget.isGroup ? const Color(0xFF6A11CB) : Colors.purpleAccent,
-                            child: widget.isGroup ? const Icon(Icons.groups, size: 20, color: Colors.white) : Text(widget.receiverName.isNotEmpty ? widget.receiverName[0].toUpperCase() : "?", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          ),
-                          const SizedBox(width: 10),
+                          
+                          // 🟢 HEADER LOGIC: Get User Level & Show VIP Name
                           Expanded(
-                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text(widget.receiverName, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                              if (!widget.isGroup)
-                                StreamBuilder<bool>(
-                                  stream: _dbService.getTypingStatus(widget.receiverId),
-                                  builder: (context, snapshot) {
-                                    if (snapshot.data == true) return const Text("Typing...", style: TextStyle(fontSize: 12, color: Colors.blueAccent));
-                                    return StreamBuilder<DatabaseEvent>(
-                                      stream: _dbService.getUserStatus(widget.receiverId),
-                                      builder: (context, statSnap) {
-                                        if(!statSnap.hasData || statSnap.data!.snapshot.value == null) return const Text("Offline", style: TextStyle(fontSize: 12, color: Colors.grey));
-                                        var val = statSnap.data!.snapshot.value as Map;
-                                        return Text(val['state'] == 'online' ? "Active now" : "Offline", style: TextStyle(fontSize: 12, color: val['state'] == 'online' ? Colors.greenAccent : Colors.grey));
-                                      }
-                                    );
-                                  },
-                                ),
-                            ]),
+                            child: StreamBuilder<DocumentSnapshot>(
+                              stream: widget.isGroup 
+                                ? null 
+                                : FirebaseFirestore.instance.collection('users').doc(widget.receiverId).snapshots(),
+                              builder: (context, snapshot) {
+                                String name = widget.receiverName;
+                                int membershipLevel = 0;
+                                String? image;
+
+                                if (snapshot.hasData && snapshot.data!.exists) {
+                                  var d = snapshot.data!.data() as Map<String, dynamic>;
+                                  name = d['username'] ?? name;
+                                  membershipLevel = d['membershipLevel'] ?? 0;
+                                  image = d['profile_pic'];
+                                }
+                                
+                                if(widget.isGroup) image = null; // Use group icon logic if stored in chat doc
+
+                                return Row(
+                                  children: [
+                                    // Avatar
+                                    CircleAvatar(
+                                      radius: 20,
+                                      backgroundColor: widget.isGroup ? const Color(0xFF6A11CB) : Colors.purpleAccent,
+                                      backgroundImage: image != null ? CachedNetworkImageProvider(image) : null,
+                                      child: (image == null) 
+                                        ? (widget.isGroup ? const Icon(Icons.groups, size: 20, color: Colors.white) : Text(name.isNotEmpty ? name[0].toUpperCase() : "?", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)))
+                                        : null,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    
+                                    // Name & Status
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start, 
+                                        children: [
+                                          // 👑 VIP Name Widget (from home_screen.dart)
+                                          VIPNameWidget(name: name, level: membershipLevel, fontSize: 16),
+                                          
+                                          if (!widget.isGroup)
+                                            StreamBuilder<bool>(
+                                              stream: _dbService.getTypingStatus(widget.receiverId),
+                                              builder: (context, snapshot) {
+                                                if (snapshot.data == true) return const Text("Typing...", style: TextStyle(fontSize: 12, color: Colors.blueAccent));
+                                                return StreamBuilder<DatabaseEvent>(
+                                                  stream: _dbService.getUserStatus(widget.receiverId),
+                                                  builder: (context, statSnap) {
+                                                    if(!statSnap.hasData || statSnap.data!.snapshot.value == null) return const Text("Offline", style: TextStyle(fontSize: 12, color: Colors.grey));
+                                                    var val = statSnap.data!.snapshot.value as Map;
+                                                    return Text(val['state'] == 'online' ? "Active now" : "Offline", style: TextStyle(fontSize: 12, color: val['state'] == 'online' ? Colors.greenAccent : Colors.grey));
+                                                  }
+                                                );
+                                              },
+                                            ),
+                                        ]),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
                           ),
+                          
                           PopupMenuButton<String>(
                             icon: const Icon(Icons.more_vert, color: Colors.white),
                             color: const Color(0xFF1E1E1E),
@@ -598,44 +703,41 @@ class _ChatScreenState extends State<ChatScreen> {
                         if(!snapshot.hasData) return const SizedBox();
                         var data = snapshot.data!.data() as Map<String, dynamic>?;
                         List pins = [];
-                        if (data != null) {
-                          if (data.containsKey('pinnedMessages')) {
-                            pins = List.from(data['pinnedMessages']);
-                          } else if (data.containsKey('pinnedMessage')) {
-                            pins = [data['pinnedMessage']];
-                          }
+                        if (data != null && data.containsKey('pinnedMessages')) {
+                          pins = List.from(data['pinnedMessages']);
                         }
                         if(pins.isEmpty) return const SizedBox();
 
                         return Container(
                           width: double.infinity,
-                          height: 50,
-                          decoration: BoxDecoration(color: Colors.grey[900], border: const Border(left: BorderSide(color: Colors.blueAccent, width: 4))),
+                          height: 52, 
+                          margin: const EdgeInsets.only(bottom: 5),
+                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), border: const Border(bottom: BorderSide(color: Colors.white10))),
                           child: PageView.builder(
                             itemCount: pins.length,
-                            scrollDirection: Axis.vertical,
+                            scrollDirection: Axis.vertical, 
                             itemBuilder: (context, index) {
                               var pin = pins[index];
                               return GestureDetector(
-                                onTap: () => _scrollToAndHighlight(pin['id']), // 🔦 Highlight
+                                onTap: () => _scrollToAndHighlight(pin['id']), 
                                 onLongPress: () => _unpinMessage(pin),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
                                   child: Row(
                                     children: [
-                                      const Icon(Icons.push_pin, color: Colors.blueAccent, size: 16),
+                                      Container(width: 3, height: 35, color: Colors.blueAccent),
                                       const SizedBox(width: 10),
                                       Expanded(
                                         child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           mainAxisAlignment: MainAxisAlignment.center,
                                           children: [
-                                            Text(pin['sender'] ?? "Pinned", style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-                                            Text(pin['text'] ?? "", style: const TextStyle(color: Colors.white, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                            Text("Pinned Message", style: const TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                            Text(pin['text'] ?? "", style: const TextStyle(color: Colors.white70, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
                                           ],
                                         ),
                                       ),
-                                      const Icon(Icons.close, size: 14, color: Colors.grey)
+                                      const Icon(Icons.push_pin, size: 16, color: Colors.grey)
                                     ],
                                   ),
                                 ),
@@ -656,7 +758,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.purpleAccent));
                     var messages = snapshot.data!;
-                    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+                    _currentMessagesList = messages;
+
+                    if (_scrollController.hasClients && _scrollController.offset == _scrollController.position.maxScrollExtent) {
+                       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+                    }
 
                     return ListView.builder(
                       controller: _scrollController,
@@ -695,21 +801,63 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
 
-              // INPUT AREA
+              // 🟢 INPUT AREA (UPDATED WITH LIVE VOICE)
               _isBlocked 
               ? Container(padding: const EdgeInsets.all(15), child: const Text("You blocked this user.", style: TextStyle(color: Colors.redAccent)))
               : Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: Colors.black87, border: Border(top: BorderSide(color: Colors.white12))),
+                  decoration: const BoxDecoration(color: Colors.black87, border: Border(top: BorderSide(color: Colors.white12))),
                   child: Row(
                     children: [
+                      // 🔴 LIVE RECORDING UI
                       if (_isRecording) ...[
                         const Icon(Icons.mic, color: Colors.redAccent),
+                        const SizedBox(width: 15),
+                        
+                        // Animated Waveform
+                        Expanded(
+                          child: SizedBox(
+                            height: 30,
+                            child: AnimatedBuilder(
+                              animation: _waveController,
+                              builder: (context, child) {
+                                return Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: List.generate(15, (index) {
+                                    // Simulated random wave height based on controller value
+                                    double height = 5 + (25 * (0.5 + 0.5 * (index % 2 == 0 ? _waveController.value : 1-_waveController.value))); 
+                                    return Container(
+                                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                                      width: 4,
+                                      height: height,
+                                      decoration: BoxDecoration(
+                                        color: Colors.redAccent, 
+                                        borderRadius: BorderRadius.circular(5)
+                                      ),
+                                    );
+                                  }),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        
                         const SizedBox(width: 10),
-                        const Text("Recording...", style: TextStyle(color: Colors.redAccent)),
-                        const Spacer(),
-                        IconButton(icon: const Icon(Icons.stop, color: Colors.redAccent), onPressed: _stopAndSendRecording)
+                        // Timer (You can add real timer logic here later)
+                        const Text("Recording...", style: TextStyle(color: Colors.white, fontSize: 12)),
+                        const SizedBox(width: 10),
+                        
+                        // Stop & Send
+                        GestureDetector(
+                           onTap: _stopAndSendRecording,
+                           child: const CircleAvatar(
+                             backgroundColor: Colors.redAccent,
+                             radius: 20,
+                             child: Icon(Icons.send, color: Colors.white, size: 20),
+                           ),
+                        ),
                       ] else ...[
+                        // NORMAL TEXT INPUT UI
                         Expanded(
                           child: TextField(
                             controller: _messageController,
@@ -751,28 +899,32 @@ class _ChatScreenState extends State<ChatScreen> {
     Map<String, int> reactionCounts = {};
     msg.reactions.forEach((key, value) => reactionCounts[value] = (reactionCounts[value] ?? 0) + 1);
 
-    // 🔦 HIGHLIGHT LOGIC CHECK
     bool isHighlighted = _highlightedMessageId == msg.messageId;
 
-    // 🟢 SWIPE TO REPLY (Dismissible)
     return Dismissible(
       key: Key(msg.messageId),
-      direction: DismissDirection.startToEnd, // Right Swipe
+      direction: DismissDirection.startToEnd,
+      dismissThresholds: const {DismissDirection.startToEnd: 0.2}, 
       confirmDismiss: (dir) async {
+        HapticFeedback.lightImpact(); 
         setState(() => _replyMessage = msg);
-        return false; // Don't Delete
+        return false; 
       },
       background: Container(
         color: Colors.transparent,
         alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(left: 20),
-        child: const Icon(Icons.reply, color: Colors.blueAccent),
+        padding: const EdgeInsets.only(left: 15),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.blueAccent),
+          child: const Icon(Icons.reply, color: Colors.white, size: 18),
+        ),
       ),
       child: GestureDetector(
         onTap: () => _showMessageOptions(msg, msg.messageId), 
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 500),
-          color: isHighlighted ? Colors.white.withOpacity(0.2) : Colors.transparent, // ✨ Flash Effect
+          duration: const Duration(milliseconds: 600),
+          color: isHighlighted ? const Color(0xFF6A11CB).withOpacity(0.4) : Colors.transparent, 
           padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
           child: Align(
             alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -789,7 +941,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Reply Preview in bubble
                       if (msg.replyTo != null)
                         GestureDetector(
                           onTap: () => _scrollToAndHighlight(msg.replyTo!['id'] ?? ""),
@@ -820,9 +971,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
                       const SizedBox(height: 4),
                       
-                      // 🟢 INSTAGRAM STYLE STATUS (Sent -> Seen)
                       Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.end, children: [
-                        Text(timeString, style: TextStyle(color: Colors.white70, fontSize: 10)),
+                        Text(timeString, style: const TextStyle(color: Colors.white70, fontSize: 10)),
                         if(isMe) ...[
                           const SizedBox(width: 5),
                           Text(
@@ -839,12 +989,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 if (msg.reactions.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4, right: 5),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white12)),
-                      child: Text(reactionCounts.keys.join(" "), style: const TextStyle(fontSize: 12)),
+                  GestureDetector(
+                    onTap: () => _showMessageOptions(msg, msg.messageId),
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 4, right: 5),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20), border: Border.all(color: Colors.white12)),
+                        child: Text(reactionCounts.keys.join(" "), style: const TextStyle(fontSize: 12)),
+                      ),
                     ),
                   ),
               ],

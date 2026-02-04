@@ -1,22 +1,45 @@
+import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Clipboard ke liye
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:qr_flutter/qr_flutter.dart'; // 🟢 QR Code Package
+import 'package:firebase_storage/firebase_storage.dart'; // 🟢 Storage for Screenshot
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:image_picker/image_picker.dart'; // 🟢 Pick Image
 import '../services/database_service.dart';
 
-class WalletScreen extends StatelessWidget {
-  const WalletScreen({super.key});
+class WalletScreen extends StatefulWidget {
+  final int? amount; // Agar direct plan se aa raha ho
+  final String? planName;
+
+  const WalletScreen({super.key, this.amount, this.planName});
+
+  @override
+  State<WalletScreen> createState() => _WalletScreenState();
+}
+
+class _WalletScreenState extends State<WalletScreen> {
+  final DatabaseService _dbService = DatabaseService();
+  
+  @override
+  void initState() {
+    super.initState();
+    // Agar premium screen se direct redirect hoke aaya hai
+    if (widget.amount != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showBuyDialog(context, "Premium Plan: ${widget.planName}", widget.amount!);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final DatabaseService dbService = DatabaseService();
-
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // Background Blobs (Premium Feel)
+          // Background Blobs
           Positioned(top: -100, left: -50, child: _buildBlob(const Color(0xFF6A11CB))),
           Positioned(bottom: 100, right: -50, child: _buildBlob(const Color(0xFF2575FC))),
           
@@ -37,9 +60,9 @@ class WalletScreen extends StatelessWidget {
                 padding: const EdgeInsets.all(20.0),
                 child: Column(
                   children: [
-                    // 💰 BALANCE CARD (Glassmorphism)
+                    // 💰 BALANCE CARD
                     StreamBuilder<DocumentSnapshot>(
-                      stream: dbService.getUserWallet(),
+                      stream: _dbService.getUserWallet(),
                       builder: (context, snapshot) {
                         int coins = 0;
                         if (snapshot.hasData && snapshot.data!.exists) {
@@ -86,12 +109,12 @@ class WalletScreen extends StatelessWidget {
                         crossAxisCount: 2,
                         crossAxisSpacing: 15,
                         mainAxisSpacing: 15,
-                        childAspectRatio: 1.2,
+                        childAspectRatio: 1.1,
                         children: [
-                          _buildCoinPack(context, "Starter", 100, 149, Colors.blueAccent),
-                          _buildCoinPack(context, "Pro", 500, 699, Colors.purpleAccent),
-                          _buildCoinPack(context, "Elite", 1200, 1499, Colors.orangeAccent),
-                          _buildCoinPack(context, "Whale", 5000, 5999, Colors.redAccent),
+                          _buildCoinPack("Starter", 100, 149, Colors.blueAccent),
+                          _buildCoinPack("Pro", 500, 699, Colors.purpleAccent),
+                          _buildCoinPack("Elite", 1200, 1499, Colors.orangeAccent),
+                          _buildCoinPack("Whale", 5000, 5999, Colors.redAccent),
                         ],
                       ),
                     ),
@@ -118,9 +141,9 @@ class WalletScreen extends StatelessWidget {
   }
 
   // 📦 Helper: Coin Pack Card
-  Widget _buildCoinPack(BuildContext context, String name, int coins, int price, Color color) {
+  Widget _buildCoinPack(String name, int coins, int price, Color color) {
     return GestureDetector(
-      onTap: () => _showBuyDialog(context, coins, price),
+      onTap: () => _showBuyDialog(context, "$coins SwiftCoins", price),
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.05),
@@ -140,99 +163,176 @@ class WalletScreen extends StatelessWidget {
     );
   }
 
-  // 💳 Helper: Buy Dialog (Dynamic QR & UPI)
-  void _showBuyDialog(BuildContext context, int coins, int price) {
+  // 💳 MAIN LOGIC: Payment Dialog with Screenshot Upload
+  void _showBuyDialog(BuildContext context, String itemName, int price) {
+    File? selectedImage;
+    bool isUploading = false;
+    final ImagePicker picker = ImagePicker();
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1E1E1E),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.purpleAccent)),
-          title: const Center(child: Text("Scan to Pay", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text("Pay ₹$price for $coins Coins", style: const TextStyle(color: Colors.white70)),
-              const SizedBox(height: 20),
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.purpleAccent)),
+              title: const Center(child: Text("Scan & Upload", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text("Pay ₹$price for $itemName", style: const TextStyle(color: Colors.white70)),
+                    const SizedBox(height: 15),
 
-              // 🟢 FETCH UPI FROM FIREBASE
-              FutureBuilder<DocumentSnapshot>(
-                future: FirebaseFirestore.instance.collection('admin_settings').doc('payment').get(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const SizedBox(height: 150, child: Center(child: CircularProgressIndicator(color: Colors.purpleAccent)));
-                  }
+                    // 1. FETCH ADMIN UPI FROM FIRESTORE
+                    FutureBuilder<DocumentSnapshot>(
+                      future: FirebaseFirestore.instance.collection('admin_settings').doc('payment').get(),
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) return const CircularProgressIndicator(color: Colors.purpleAccent);
+                        
+                        // Default fallback if not set in DB
+                        String upiId = (snapshot.data!.data() as Map<String, dynamic>?)?['upi_id'] ?? "admin@upi";
+                        String upiData = "upi://pay?pa=$upiId&pn=SwiftChat&am=$price&tn=$itemName";
 
-                  if (!snapshot.hasData || !snapshot.data!.exists) {
-                    return const Text("Payment System Unavailable", style: TextStyle(color: Colors.redAccent));
-                  }
-
-                  String upiId = snapshot.data!['upi_id'] ?? "admin@upi";
-                  
-                  // QR Data Format: upi://pay?pa=UPI_ID&pn=NAME&am=AMOUNT
-                  String upiData = "upi://pay?pa=$upiId&pn=SwiftChat&am=$price&tn=Buying $coins Coins";
-
-                  return Column(
-                    children: [
-                      // 🔳 QR CODE GENERATOR
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(15)),
-                        child: QrImageView(
-                          data: upiData,
-                          version: QrVersions.auto,
-                          size: 200.0,
-                          backgroundColor: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      
-                      // 📋 UPI ID COPY
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: Colors.black,
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(color: Colors.white24)
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+                        return Column(
                           children: [
-                            Text(upiId, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                            const SizedBox(width: 10),
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(10)),
+                              child: QrImageView(data: upiData, version: QrVersions.auto, size: 180.0),
+                            ),
+                            const SizedBox(height: 10),
                             InkWell(
                               onTap: () {
                                 Clipboard.setData(ClipboardData(text: upiId));
                                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("UPI ID Copied!")));
                               },
-                              child: const Icon(Icons.copy, color: Colors.blueAccent, size: 20),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(upiId, style: const TextStyle(color: Colors.orangeAccent)),
+                                  const SizedBox(width: 5),
+                                  const Icon(Icons.copy, color: Colors.orangeAccent, size: 14),
+                                ],
+                              ),
                             ),
                           ],
+                        );
+                      }
+                    ),
+
+                    const SizedBox(height: 20),
+                    const Divider(color: Colors.white24),
+                    const SizedBox(height: 10),
+
+                    // 2. UPLOAD SCREENSHOT SECTION
+                    const Text("Upload Payment Screenshot", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
+                    
+                    GestureDetector(
+                      onTap: () async {
+                        final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+                        if (image != null) {
+                          setState(() => selectedImage = File(image.path));
+                        }
+                      },
+                      child: Container(
+                        height: 120,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: Colors.black45,
+                          borderRadius: BorderRadius.circular(15),
+                          border: Border.all(color: selectedImage != null ? Colors.greenAccent : Colors.white24),
                         ),
+                        child: selectedImage != null
+                          ? ClipRRect(borderRadius: BorderRadius.circular(15), child: Image.file(selectedImage!, fit: BoxFit.cover))
+                          : const Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.cloud_upload, color: Colors.purpleAccent, size: 30),
+                                SizedBox(height: 5),
+                                Text("Tap to select image", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                              ],
+                            ),
                       ),
-                    ],
-                  );
-                }
+                    ),
+                  ],
+                ),
               ),
-              
-              const SizedBox(height: 20),
-              const Text("After payment, send screenshot to:", style: TextStyle(color: Colors.grey, fontSize: 12)),
-              const Text("+91 82501 56425", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context), 
-              child: const Text("Cancel", style: TextStyle(color: Colors.redAccent))
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6A11CB)),
-              onPressed: () => Navigator.pop(context),
-              child: const Text("I Paid"),
-            ),
-          ],
+              actions: [
+                if (!isUploading)
+                  TextButton(
+                    onPressed: () => Navigator.pop(context), 
+                    child: const Text("Cancel", style: TextStyle(color: Colors.redAccent))
+                  ),
+                
+                // 3. SUBMIT BUTTON
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: selectedImage == null ? Colors.grey : const Color(0xFF6A11CB),
+                  ),
+                  onPressed: selectedImage == null || isUploading ? null : () async {
+                    setState(() => isUploading = true);
+                    
+                    try {
+                      User? user = FirebaseAuth.instance.currentUser;
+                      if (user == null) return;
+
+                      // A. Upload Image to Storage
+                      String fileName = "pay_${DateTime.now().millisecondsSinceEpoch}.jpg";
+                      Reference ref = FirebaseStorage.instance.ref().child('payment_screenshots/$fileName');
+                      await ref.putFile(selectedImage!);
+                      String downloadUrl = await ref.getDownloadURL();
+
+                      // B. Create Request in Firestore for Admin
+                      await FirebaseFirestore.instance.collection('payment_requests').add({
+                        'userId': user.uid,
+                        'username': user.displayName ?? "Unknown",
+                        'amount': price,
+                        'itemName': itemName,
+                        'screenshotUrl': downloadUrl,
+                        'status': 'pending', // Pending -> Approved
+                        'timestamp': FieldValue.serverTimestamp(),
+                      });
+
+                      if(context.mounted) {
+                        Navigator.pop(context); // Close Dialog
+                        _showSuccessDialog(context);
+                      }
+                    } catch (e) {
+                      setState(() => isUploading = false);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                    }
+                  },
+                  child: isUploading 
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Text("Submit Request"),
+                ),
+              ],
+            );
+          }
         );
       },
+    );
+  }
+
+  void _showSuccessDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Icon(Icons.check_circle, color: Colors.greenAccent, size: 50),
+        content: const Text(
+          "Request Sent!\n\nAdmin will verify your screenshot and add coins/plan to your account shortly.",
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))
+        ],
+      )
     );
   }
 }

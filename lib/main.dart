@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart'; // 🟢 Added for Realtime DB
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'screens/splash_screen.dart';
 import 'services/notification_service.dart';
-import 'package:flutter/services.dart'; // Status Bar Color ke liye
+import 'package:flutter/services.dart'; 
 
 // 🟢 Background Handler
 @pragma('vm:entry-point')
@@ -16,14 +17,28 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  
+  // 1. Notification Setup
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
+  // 🟢 2. Firestore Offline Persistence (Already Optimized)
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
   );
 
-  // 🟢 Status Bar ko Transparent karo premium look ke liye
+  // 🟢 3. Realtime Database Offline Persistence (NEW ADDITION)
+  // Ye zaroori hai taaki chats offline mode mein bhi dikhein aur send hon
+  try {
+    FirebaseDatabase.instance.setPersistenceEnabled(true);
+    // Optional: Cache size limit (100MB) taaki device storage full na ho
+    FirebaseDatabase.instance.setPersistenceCacheSizeBytes(100 * 1024 * 1024); 
+  } catch (e) {
+    // Agar web par run ho raha hai ya duplicate call hai to error ignore karein
+    print("Realtime DB Persistence Warning: $e");
+  }
+
+  // 🟢 4. Status Bar UI
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -45,6 +60,7 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
+    // Notifications initialize karna
     _notificationService.initNotifications();
   }
 
@@ -53,24 +69,24 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Swift Chat Premium',
-      // 🟢 NAYA PREMIUM THEME
+      
+      // 🟢 PREMIUM THEME SETUP
       theme: ThemeData(
         brightness: Brightness.dark,
-        // Primary Color Gradient jaisa purple
         primaryColor: const Color(0xFF6A11CB), 
-        scaffoldBackgroundColor: const Color(0xFF121212), // Thoda soft black
+        scaffoldBackgroundColor: const Color(0xFF121212),
         useMaterial3: true,
         
         // Modern Color Scheme
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF6A11CB), // Purple
-          secondary: Color(0xFF2575FC), // BlueAccent
+          primary: Color(0xFF6A11CB), 
+          secondary: Color(0xFF2575FC), 
           surface: Color(0xFF1E1E1E),
         ),
 
         // Stylish App Bar
         appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent, // Glass effect ke liye transparent
+          backgroundColor: Colors.transparent, 
           elevation: 0,
           centerTitle: false,
           titleTextStyle: TextStyle(
@@ -81,7 +97,6 @@ class _MyAppState extends State<MyApp> {
           ),
         ),
         
-        // Floating Action Button Theme
         floatingActionButtonTheme: const FloatingActionButtonThemeData(
           backgroundColor: Color(0xFF6A11CB),
           foregroundColor: Colors.white,
