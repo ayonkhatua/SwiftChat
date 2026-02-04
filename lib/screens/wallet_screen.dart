@@ -3,14 +3,15 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart'; // 🟢 Storage for Screenshot
+// 🟢 Firebase Storage Hata diya
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:image_picker/image_picker.dart'; // 🟢 Pick Image
+import 'package:image_picker/image_picker.dart';
 import '../services/database_service.dart';
+import '../services/cloudinary_service.dart'; // 🟢 Cloudinary Service Import
 
 class WalletScreen extends StatefulWidget {
-  final int? amount; // Agar direct plan se aa raha ho
+  final int? amount;
   final String? planName;
 
   const WalletScreen({super.key, this.amount, this.planName});
@@ -25,7 +26,6 @@ class _WalletScreenState extends State<WalletScreen> {
   @override
   void initState() {
     super.initState();
-    // Agar premium screen se direct redirect hoke aaya hai
     if (widget.amount != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showBuyDialog(context, "Premium Plan: ${widget.planName}", widget.amount!);
@@ -64,37 +64,73 @@ class _WalletScreenState extends State<WalletScreen> {
                     StreamBuilder<DocumentSnapshot>(
                       stream: _dbService.getUserWallet(),
                       builder: (context, snapshot) {
-                        int coins = 0;
+                        int totalCoins = 0;
+                        int giftedCoins = 0;
                         if (snapshot.hasData && snapshot.data!.exists) {
                            var data = snapshot.data!.data() as Map<String, dynamic>;
-                           coins = data['swiftCoins'] ?? 0;
+                           int purchasedCoins = data['purchasedCoins'] ?? 0;
+                           giftedCoins = data['giftedCoins'] ?? 0;
+                           totalCoins = purchasedCoins + giftedCoins;
                         }
 
-                        return Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(25),
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)]),
-                            borderRadius: BorderRadius.circular(25),
-                            boxShadow: [BoxShadow(color: const Color(0xFF6A11CB).withOpacity(0.5), blurRadius: 20, spreadRadius: 2)],
-                            border: Border.all(color: Colors.white24)
-                          ),
-                          child: Column(
-                            children: [
-                              const Text("Available Balance", style: TextStyle(color: Colors.white70, fontSize: 16)),
-                              const SizedBox(height: 10),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                        return Column(
+                          children: [
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(25),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)]),
+                                borderRadius: BorderRadius.circular(25),
+                                boxShadow: [BoxShadow(color: const Color(0xFF6A11CB).withOpacity(0.5), blurRadius: 20, spreadRadius: 2)],
+                                border: Border.all(color: Colors.white24)
+                              ),
+                              child: Column(
                                 children: [
-                                  const Icon(Icons.monetization_on, color: Color(0xFFFFD700), size: 40),
-                                  const SizedBox(width: 10),
-                                  Text("$coins", style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold)),
+                                  const Text("Total Balance", style: TextStyle(color: Colors.white70, fontSize: 16)),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.monetization_on, color: Color(0xFFFFD700), size: 40),
+                                      const SizedBox(width: 10),
+                                      Text("$totalCoins", style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 5),
+                                  const Text("SwiftCoins", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                                 ],
                               ),
-                              const SizedBox(height: 5),
-                              const Text("SwiftCoins", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                            ],
-                          ),
+                            ),
+                            const SizedBox(height: 20),
+
+                            // 💸 WITHDRAWAL CARD
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.greenAccent.withOpacity(0.5))
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text("Withdrawable Balance", style: TextStyle(color: Colors.white70)),
+                                      const SizedBox(height: 5),
+                                      Text("$giftedCoins Coins", style: const TextStyle(color: Colors.greenAccent, fontSize: 20, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: giftedCoins > 0 ? () => _showWithdrawalDialog(context, giftedCoins) : null,
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent, foregroundColor: Colors.black, disabledBackgroundColor: Colors.grey.withOpacity(0.3)),
+                                    child: const Text("Withdraw"),
+                                  )
+                                ],
+                              ),
+                            )
+                          ],
                         );
                       }
                     ),
@@ -163,7 +199,130 @@ class _WalletScreenState extends State<WalletScreen> {
     );
   }
 
-  // 💳 MAIN LOGIC: Payment Dialog with Screenshot Upload
+  // 💸 NEW: Withdrawal Dialog
+  void _showWithdrawalDialog(BuildContext context, int maxAmount) {
+    final upiController = TextEditingController();
+    final amountController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool isProcessing = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Colors.greenAccent)),
+              title: const Center(child: Text("Withdraw Coins", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text("You can withdraw up to $maxAmount gifted coins.\nMinimum withdrawal limit: 500 coins.", textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                      const SizedBox(height: 20),
+                      
+                      TextFormField(
+                        controller: amountController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          labelText: "Amount to Withdraw",
+                          labelStyle: const TextStyle(color: Colors.grey),
+                          prefixIcon: const Icon(Icons.monetization_on, color: Colors.greenAccent),
+                          suffixIcon: TextButton(
+                            onPressed: () => amountController.text = maxAmount.toString(),
+                            child: const Text("MAX", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold)),
+                          ),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.greenAccent)),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) return "Please enter an amount";
+                          int? amount = int.tryParse(value);
+                          if (amount == null) return "Invalid number";
+                          if (amount < 500) return "Minimum withdrawal is 500 coins";
+                          if (amount > maxAmount) return "Cannot withdraw more than $maxAmount";
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 15),
+
+                      TextFormField(
+                        controller: upiController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: InputDecoration(
+                          labelText: "UPI ID / Number",
+                          labelStyle: const TextStyle(color: Colors.grey),
+                          prefixIcon: const Icon(Icons.payment, color: Colors.greenAccent),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.greenAccent)),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) return "Please enter your UPI ID";
+                          return null;
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                if (!isProcessing)
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("Cancel", style: TextStyle(color: Colors.redAccent)),
+                  ),
+                
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent),
+                  onPressed: isProcessing ? null : () async {
+                    if (formKey.currentState!.validate()) {
+                      setState(() => isProcessing = true);
+                      try {
+                        User? user = FirebaseAuth.instance.currentUser;
+                        if (user == null) throw Exception("User not logged in");
+
+                        int amountToWithdraw = int.parse(amountController.text);
+                        String upiId = upiController.text;
+
+                        WriteBatch batch = FirebaseFirestore.instance.batch();
+
+                        DocumentReference requestRef = FirebaseFirestore.instance.collection('withdrawal_requests').doc();
+                        batch.set(requestRef, {'userId': user.uid, 'username': user.displayName ?? "Unknown", 'amount': amountToWithdraw, 'upiId': upiId, 'status': 'pending', 'timestamp': FieldValue.serverTimestamp()});
+
+                        DocumentReference walletRef = FirebaseFirestore.instance.collection('wallets').doc(user.uid);
+                        batch.update(walletRef, {'giftedCoins': FieldValue.increment(-amountToWithdraw)});
+
+                        await batch.commit();
+
+                        if (context.mounted) {
+                          Navigator.pop(context);
+                          _showSuccessDialog(context, message: "Withdrawal request sent! Admin will process it shortly. The amount has been deducted from your withdrawable balance.");
+                        }
+
+                      } catch (e) {
+                        setState(() => isProcessing = false);
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                      }
+                    }
+                  },
+                  child: isProcessing
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
+                    : const Text("Submit Request", style: TextStyle(color: Colors.black)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // 💳 MAIN LOGIC: Payment Dialog with Screenshot Upload (Cloudinary Updated)
   void _showBuyDialog(BuildContext context, String itemName, int price) {
     File? selectedImage;
     bool isUploading = false;
@@ -192,7 +351,7 @@ class _WalletScreenState extends State<WalletScreen> {
                       builder: (context, snapshot) {
                         if (!snapshot.hasData) return const CircularProgressIndicator(color: Colors.purpleAccent);
                         
-                        // Default fallback if not set in DB
+                        // Default fallback
                         String upiId = (snapshot.data!.data() as Map<String, dynamic>?)?['upi_id'] ?? "admin@upi";
                         String upiData = "upi://pay?pa=$upiId&pn=SwiftChat&am=$price&tn=$itemName";
 
@@ -268,7 +427,7 @@ class _WalletScreenState extends State<WalletScreen> {
                     child: const Text("Cancel", style: TextStyle(color: Colors.redAccent))
                   ),
                 
-                // 3. SUBMIT BUTTON
+                // 3. SUBMIT BUTTON (With Cloudinary Logic)
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: selectedImage == null ? Colors.grey : const Color(0xFF6A11CB),
@@ -280,11 +439,12 @@ class _WalletScreenState extends State<WalletScreen> {
                       User? user = FirebaseAuth.instance.currentUser;
                       if (user == null) return;
 
-                      // A. Upload Image to Storage
-                      String fileName = "pay_${DateTime.now().millisecondsSinceEpoch}.jpg";
-                      Reference ref = FirebaseStorage.instance.ref().child('payment_screenshots/$fileName');
-                      await ref.putFile(selectedImage!);
-                      String downloadUrl = await ref.getDownloadURL();
+                      // 🟢 A. Upload Image to Cloudinary (Updated)
+                      String? downloadUrl = await CloudinaryService().uploadFile(selectedImage!);
+
+                      if (downloadUrl == null) {
+                        throw Exception("Image upload failed");
+                      }
 
                       // B. Create Request in Firestore for Admin
                       await FirebaseFirestore.instance.collection('payment_requests').add({
@@ -292,7 +452,7 @@ class _WalletScreenState extends State<WalletScreen> {
                         'username': user.displayName ?? "Unknown",
                         'amount': price,
                         'itemName': itemName,
-                        'screenshotUrl': downloadUrl,
+                        'screenshotUrl': downloadUrl, // Cloudinary URL
                         'status': 'pending', // Pending -> Approved
                         'timestamp': FieldValue.serverTimestamp(),
                       });
@@ -318,16 +478,16 @@ class _WalletScreenState extends State<WalletScreen> {
     );
   }
 
-  void _showSuccessDialog(BuildContext context) {
+  void _showSuccessDialog(BuildContext context, {String message = "Request Sent!\n\nAdmin will verify your screenshot and add coins/plan to your account shortly."}) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1E1E1E),
         title: const Icon(Icons.check_circle, color: Colors.greenAccent, size: 50),
-        content: const Text(
-          "Request Sent!\n\nAdmin will verify your screenshot and add coins/plan to your account shortly.",
+        content: Text(
+          message,
           textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white70),
+          style: const TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))

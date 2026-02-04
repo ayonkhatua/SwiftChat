@@ -15,7 +15,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/database_service.dart';
 import '../models/message_model.dart';
 import 'wallet_screen.dart';
-import 'home_screen.dart'; // 🟢 Added to use VIPNameWidget
+import 'home_screen.dart'; 
 
 class ChatScreen extends StatefulWidget {
   final String receiverId;
@@ -54,7 +54,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   // Reply, Edit & Highlight State
   Message? _replyMessage;
   Message? _editingMessage;
-  String? _highlightedMessageId; // 🔦 Highlight Effect ID
+  String? _highlightedMessageId; 
 
   // 🔍 Pin Scroll Logic Helper
   List<Message> _currentMessagesList = []; 
@@ -111,7 +111,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
   }
 
-  // 🔦 TELEGRAM STYLE HIGHLIGHT & SCROLL LOGIC
   void _scrollToAndHighlight(String messageId) {
     setState(() {
       _highlightedMessageId = messageId;
@@ -146,9 +145,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
   }
 
-  // 📌 SMART PIN OPTIONS & LOGIC (Updated)
+  // 📌 SMART PIN OPTIONS
   void _showPinOptions(Message msg) async {
-    // 1. Check if message is already pinned
     String currentUserId = FirebaseAuth.instance.currentUser!.uid;
     String chatId = widget.isGroup 
         ? widget.receiverId 
@@ -161,7 +159,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     
     if(chatDoc.exists) {
       List pins = chatDoc.get('pinnedMessages') ?? [];
-      // Find if this message ID exists in pins
       var existing = pins.where((p) => p['id'] == msg.messageId);
       if(existing.isNotEmpty) {
         isAlreadyPinned = true;
@@ -224,9 +221,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       onTap: () async {
         Navigator.pop(context); 
         if (isPremium) {
-          // 💎 Check Premium Status
-          // NOTE: Assuming User model has membershipLevel logic in DatabaseService
-          // For now using boolean check as per existing structure
           bool userIsPremium = await _dbService.isUserPremium();
           if (!userIsPremium) {
             _showPremiumLockDialog();
@@ -291,7 +285,107 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
   }
 
-  // 🎙️ RECORDING & AUDIO
+  // 🎁 GIFT COINS LOGIC
+  void _sendGift() {
+    TextEditingController amountController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Text("Gift Coins 🎁", style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text("1 Coin = ₹1", style: TextStyle(color: Colors.grey)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: "Enter Amount",
+                hintStyle: const TextStyle(color: Colors.grey),
+                filled: true,
+                fillColor: Colors.white10,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                prefixIcon: const Icon(Icons.monetization_on, color: Colors.amber),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.redAccent))),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6A11CB)),
+            onPressed: () async {
+              int? amount = int.tryParse(amountController.text);
+              if (amount == null || amount <= 0) {
+                _showSnack("Invalid amount");
+                return;
+              }
+              Navigator.pop(context);
+              await _processGiftTransaction(amount);
+            },
+            child: const Text("Send Gift"),
+          )
+        ],
+      )
+    );
+  }
+
+  Future<void> _processGiftTransaction(int amount) async {
+    User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    if (user.uid == widget.receiverId) {
+      _showSnack("You cannot gift yourself!");
+      return;
+    }
+
+    DocumentReference senderWallet = FirebaseFirestore.instance.collection('wallets').doc(user.uid);
+    DocumentReference receiverWallet = FirebaseFirestore.instance.collection('wallets').doc(widget.receiverId);
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        DocumentSnapshot senderSnap = await transaction.get(senderWallet);
+        if (!senderSnap.exists) throw Exception("Insufficient Balance");
+        
+        Map<String, dynamic> data = senderSnap.data() as Map<String, dynamic>;
+        int purchased = data['purchasedCoins'] ?? 0;
+        int gifted = data['giftedCoins'] ?? 0;
+        int total = purchased + gifted;
+
+        if (total < amount) throw Exception("Insufficient Balance");
+
+        int newPurchased = purchased;
+        int newGifted = gifted;
+
+        if (purchased >= amount) {
+          newPurchased -= amount;
+        } else {
+          int remaining = amount - purchased;
+          newPurchased = 0;
+          newGifted -= remaining;
+        }
+
+        transaction.update(senderWallet, {'purchasedCoins': newPurchased, 'giftedCoins': newGifted});
+        transaction.set(receiverWallet, {'giftedCoins': FieldValue.increment(amount)}, SetOptions(merge: true));
+      });
+
+      await _dbService.sendMessage(widget.receiverId, "🎁 Gifted $amount Coins", widget.receiverName, isGroup: widget.isGroup);
+      _showSnack("Sent $amount Coins! 🎁");
+
+    } catch (e) {
+      if (e.toString().contains("Insufficient Balance")) {
+        _showSnack("Insufficient Balance! Buy more coins.");
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const WalletScreen()));
+      } else {
+        _showSnack("Transaction Failed: $e");
+      }
+    }
+  }
+
+  // ️ RECORDING & AUDIO
   Future<void> _startRecording() async {
     if (await Permission.microphone.request().isGranted) {
       final Directory appDir = await getApplicationDocumentsDirectory();
@@ -696,7 +790,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       ),
                     ),
                     
-                    // 📌 MULTIPLE PINNED MESSAGE CAROUSEL
+                    // 📌 MULTIPLE PINNED MESSAGE CAROUSEL (IMPROVED UI)
                     StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance.collection('chats').doc(widget.isGroup ? widget.receiverId : (FirebaseAuth.instance.currentUser!.uid.compareTo(widget.receiverId) < 0 ? "${FirebaseAuth.instance.currentUser!.uid}_${widget.receiverId}" : "${widget.receiverId}_${FirebaseAuth.instance.currentUser!.uid}")).snapshots(),
                       builder: (context, snapshot) {
@@ -710,39 +804,76 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
                         return Container(
                           width: double.infinity,
-                          height: 52, 
+                          height: 48, // Thoda sleek banaya
                           margin: const EdgeInsets.only(bottom: 5),
-                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), border: const Border(bottom: BorderSide(color: Colors.white10))),
-                          child: PageView.builder(
-                            itemCount: pins.length,
-                            scrollDirection: Axis.vertical, 
-                            itemBuilder: (context, index) {
-                              var pin = pins[index];
-                              return GestureDetector(
-                                onTap: () => _scrollToAndHighlight(pin['id']), 
-                                onLongPress: () => _unpinMessage(pin),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
-                                  child: Row(
-                                    children: [
-                                      Container(width: 3, height: 35, color: Colors.blueAccent),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          mainAxisAlignment: MainAxisAlignment.center,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1E1E).withOpacity(0.9), 
+                            border: const Border(bottom: BorderSide(color: Colors.white12))
+                          ),
+                          child: Row(
+                            children: [
+                              // 🟢 LEFT INDICATOR: SHOWS PIN COUNT
+                              Container(
+                                width: 45,
+                                color: const Color(0xFF2575FC).withOpacity(0.2),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.push_pin, color: Color(0xFF2575FC), size: 16),
+                                    Text(
+                                      "${pins.length} Pin", 
+                                      style: const TextStyle(color: Color(0xFF2575FC), fontSize: 9, fontWeight: FontWeight.bold)
+                                    )
+                                  ],
+                                ),
+                              ),
+                              
+                              // 🟢 RIGHT CONTENT: SCROLLABLE PINS
+                              Expanded(
+                                child: PageView.builder(
+                                  itemCount: pins.length,
+                                  scrollDirection: Axis.vertical, 
+                                  itemBuilder: (context, index) {
+                                    var pin = pins[index];
+                                    return GestureDetector(
+                                      onTap: () => _scrollToAndHighlight(pin['id']), 
+                                      onLongPress: () => _unpinMessage(pin),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                        alignment: Alignment.centerLeft,
+                                        child: Row(
                                           children: [
-                                            Text("Pinned Message", style: const TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                                            Text(pin['text'] ?? "", style: const TextStyle(color: Colors.white70, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                            // Vertical Line Separator
+                                            Container(width: 2, height: 25, color: Colors.white24),
+                                            const SizedBox(width: 10),
+                                            
+                                            // Pin Content
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                children: [
+                                                  Text(
+                                                    "Pinned Message #${index + 1}", 
+                                                    style: const TextStyle(color: Colors.blueAccent, fontSize: 10, fontWeight: FontWeight.bold)
+                                                  ),
+                                                  Text(
+                                                    pin['text'] ?? "", 
+                                                    style: const TextStyle(color: Colors.white, fontSize: 12), 
+                                                    maxLines: 1, 
+                                                    overflow: TextOverflow.ellipsis
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
                                           ],
                                         ),
                                       ),
-                                      const Icon(Icons.push_pin, size: 16, color: Colors.grey)
-                                    ],
-                                  ),
+                                    );
+                                  },
                                 ),
-                              );
-                            },
+                              ),
+                            ],
                           ),
                         );
                       },
@@ -869,7 +1000,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                               fillColor: Colors.white10,
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(30), borderSide: BorderSide.none),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-                              suffixIcon: IconButton(icon: const Icon(Icons.camera_alt, color: Colors.grey), onPressed: _sendImage),
+                              suffixIcon: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(icon: const Icon(Icons.card_giftcard, color: Colors.amber), onPressed: _sendGift),
+                                  IconButton(icon: const Icon(Icons.camera_alt, color: Colors.grey), onPressed: _sendImage),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -904,16 +1041,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     return Dismissible(
       key: Key(msg.messageId),
       direction: DismissDirection.startToEnd,
+      
+      // 🟢 FIX 1: CONTROLLED SWIPE (SLIDE THRESHOLD & SNAP BACK)
       dismissThresholds: const {DismissDirection.startToEnd: 0.2}, 
+      movementDuration: const Duration(milliseconds: 100), // Fast snap back
+      
       confirmDismiss: (dir) async {
         HapticFeedback.lightImpact(); 
         setState(() => _replyMessage = msg);
-        return false; 
+        return false; // Don't allow delete, just trigger reply
       },
+      
+      // 🟢 Background Design
       background: Container(
         color: Colors.transparent,
         alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(left: 15),
+        padding: const EdgeInsets.only(left: 20), // Thoda door rakha taaki icon overlap na kare
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.blueAccent),

@@ -146,7 +146,7 @@ class PremiumScreen extends StatelessWidget {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                      Text(title, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                       Text(price, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.bold)),
                     ],
                   )

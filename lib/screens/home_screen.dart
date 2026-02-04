@@ -8,7 +8,6 @@ import '../services/database_service.dart';
 import '../services/notification_service.dart';
 import 'chat_screen.dart';
 import 'login_screen.dart';
-import 'edit_profile_screen.dart';
 import 'profile_settings_screen.dart';
 import 'create_group_screen.dart';
 import 'premium_screen.dart';
@@ -593,9 +592,7 @@ class ProfilePage extends StatelessWidget {
     final DatabaseService dbService = DatabaseService();
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(title: const Text("Profile"), backgroundColor: Colors.transparent, actions: [
-        IconButton(icon: const Icon(Icons.edit, color: Color(0xFF6A11CB)), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const EditProfileScreen())))
-      ]),
+      appBar: AppBar(title: const Text("Profile"), backgroundColor: Colors.transparent),
       body: StreamBuilder<DocumentSnapshot>(
         stream: dbService.getUserData(),
         builder: (context, snapshot) {

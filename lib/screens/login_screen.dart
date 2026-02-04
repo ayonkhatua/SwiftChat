@@ -1,5 +1,6 @@
 import 'dart:ui'; // Glass Effect ke liye
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
 
@@ -40,13 +41,35 @@ class _LoginScreenState extends State<LoginScreen> {
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const HomeScreen()));
 
     } catch (e) {
+      String errorMessage = "An error occurred. Please try again.";
+
+      if (e is FirebaseAuthException) {
+        switch (e.code) {
+          case 'user-not-found':
+          case 'invalid-credential':
+            errorMessage = "Account does not exist! Please create an account.";
+            break;
+          case 'wrong-password':
+            errorMessage = "Incorrect Password! Please try again.";
+            break;
+          case 'email-already-in-use':
+            errorMessage = "Email is already in use! Please login.";
+            break;
+          default:
+            errorMessage = e.message ?? "Authentication failed.";
+        }
+      }
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text("Error: ${e.toString()}"),
-          backgroundColor: Colors.redAccent,
-          behavior: SnackBarBehavior.floating, // Floating snackbar premium lagta hai
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ));
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1E1E1E),
+            title: const Row(children: [Icon(Icons.error_outline, color: Colors.redAccent), SizedBox(width: 10), Text("Alert", style: TextStyle(color: Colors.white))]),
+            content: Text(errorMessage, style: const TextStyle(color: Colors.white70)),
+            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK", style: TextStyle(color: Colors.blueAccent)))],
+          )
+        );
       }
     }
     if (mounted) setState(() => isLoading = false);

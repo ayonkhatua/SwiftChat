@@ -9,25 +9,34 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  
+  # Firebase Core & Auth
   firebase_core: ^2.27.1
   firebase_auth: ^4.17.6
   cloud_firestore: ^4.15.6
   firebase_database: ^10.4.0
+  firebase_storage: ^11.7.7 # Ise rehne diya hai backup ke liye
+  firebase_messaging: ^14.9.4
+  
+  # 🟢 Cloudinary (New Media Handler)
+  cloudinary_public: ^0.23.1
+
+  # UI & Utilities
   provider: ^6.1.1
   intl: ^0.19.0
   google_fonts: ^6.1.0
   image_picker: ^1.2.1
-  firebase_storage: ^11.7.7
   cached_network_image: ^3.4.0
-  firebase_messaging: ^14.9.4
   flutter_local_notifications: ^20.0.0
   http: ^1.6.0
-  googleapis_auth: ^1.4.1  # 👈 Ye naya add kiya hai V1 API ke liye
+  googleapis_auth: ^1.4.1
+  qr_flutter: ^4.1.0
+
+  # Audio & Permissions
   record: ^6.0.0
   audioplayers: ^6.5.1
   path_provider: ^2.1.5
   permission_handler: ^12.0.1
-  qr_flutter: ^4.1.0
 
 dev_dependencies:
   flutter_test:
@@ -37,6 +46,5 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # 🟢 Ye assets wala part add karna mat bhulna!
   assets:
-    - assets/service-account.json 
+    - assets/service-account.json
