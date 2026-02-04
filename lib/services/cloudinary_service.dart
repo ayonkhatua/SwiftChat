@@ -3,8 +3,8 @@ import 'package:cloudinary_public/cloudinary_public.dart';
 
 class CloudinaryService {
   // 🔴 Apne Details Yahan Dalein
-  final String _cloudName = "YOUR_CLOUD_NAME"; 
-  final String _uploadPreset = "YOUR_UPLOAD_PRESET";
+  final String _cloudName = "dkojsdqvz"; 
+  final String _uploadPreset = "my_database";
 
   late CloudinaryPublic cloudinary;
 

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:io';
 import '../services/database_service.dart';
+import '../services/cloudinary_service.dart';
 import 'premium_screen.dart'; // 🟢 Premium Screen Import kiya
 
 class CreateGroupScreen extends StatefulWidget {
@@ -40,12 +43,32 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // Database Service ko call karo
-      await _dbService.createGroup(
-        _nameController.text.trim(), 
-        _groupIcon, 
-        _selectedUserIds
-      );
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      // 1. Upload Icon to Cloudinary (if selected)
+      String? iconUrl;
+      if (_groupIcon != null) {
+        iconUrl = await CloudinaryService().uploadFile(File(_groupIcon!.path));
+      }
+
+      // 2. Create Group in Firestore Directly
+      DocumentReference groupRef = FirebaseFirestore.instance.collection('chats').doc();
+      
+      List<String> participants = [user.uid, ..._selectedUserIds];
+      
+      await groupRef.set({
+        'groupName': _nameController.text.trim(),
+        'groupIcon': iconUrl,
+        'isGroup': true,
+        'adminId': user.uid,
+        'participants': participants,
+        'recentUpdated': FieldValue.serverTimestamp(),
+        'lastMessage': "Group Created",
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'createdBy': user.displayName,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
       // Success
       if(mounted) {

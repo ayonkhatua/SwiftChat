@@ -15,6 +15,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/database_service.dart';
 import '../models/message_model.dart';
 import 'wallet_screen.dart';
+import '../services/cloudinary_service.dart';
 import 'home_screen.dart'; 
 
 class ChatScreen extends StatefulWidget {
@@ -58,6 +59,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // 🔍 Pin Scroll Logic Helper
   List<Message> _currentMessagesList = []; 
+
+  int _currentPinIndex = 0; // 🟢 Added for Telegram-style Pin Looping
 
   // 🌊 Animation Controller for Voice Wave
   late AnimationController _waveController;
@@ -385,6 +388,44 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
   }
 
+  // ☁️ CLOUDINARY & FIRESTORE DIRECT SEND
+  Future<void> _sendMediaMessage(String url, String type) async {
+    User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    String chatId = widget.isGroup 
+        ? widget.receiverId 
+        : (user.uid.compareTo(widget.receiverId) < 0 ? "${user.uid}_${widget.receiverId}" : "${widget.receiverId}_${user.uid}");
+
+    DocumentReference chatDoc = FirebaseFirestore.instance.collection('chats').doc(chatId);
+    
+    Map<String, dynamic> messageData = {
+      'senderId': user.uid,
+      'senderName': widget.isGroup ? (user.displayName ?? "Member") : user.displayName,
+      'text': url, // Cloudinary URL
+      'type': type, // 'image' or 'audio'
+      'timestamp': FieldValue.serverTimestamp(),
+      'isRead': false,
+      'reactions': {},
+    };
+
+    // Add to subcollection
+    await chatDoc.collection('messages').add(messageData);
+
+    // Update Last Message
+    String lastMsgText = type == 'image' ? "📷 Photo" : "🎤 Voice Note";
+    await chatDoc.set({
+      'lastMessage': lastMsgText,
+      'lastMessageTime': FieldValue.serverTimestamp(),
+      'recentUpdated': FieldValue.serverTimestamp(),
+      if (!widget.isGroup) 'users': {user.uid: user.displayName, widget.receiverId: widget.receiverName},
+      if (!widget.isGroup) 'participants': [user.uid, widget.receiverId],
+    }, SetOptions(merge: true));
+
+    // Send Notification (Optional: relying on existing notification service triggers or manual)
+    // _dbService.sendNotification(...) - Assuming DB service handles this via cloud functions or we skip for now
+  }
+
   // ️ RECORDING & AUDIO
   Future<void> _startRecording() async {
     if (await Permission.microphone.request().isGranted) {
@@ -401,7 +442,15 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final path = await _audioRecorder.stop();
     setState(() => _isRecording = false);
     if (path != null) {
-      await _dbService.sendAudioMessage(widget.receiverId, path, widget.receiverName, isGroup: widget.isGroup);
+      _showSnack("Uploading Audio...");
+      // Upload to Cloudinary (Audio treated as video resource often works best)
+      String? url = await CloudinaryService().uploadFile(File(path), isVideo: true);
+      
+      if (url != null) {
+        await _sendMediaMessage(url, 'audio');
+      } else {
+        _showSnack("Audio Upload Failed");
+      }
     }
   }
 
@@ -464,7 +513,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
-      await _dbService.sendImageMessage(widget.receiverId, image, widget.receiverName, isGroup: widget.isGroup); 
+      _showSnack("Uploading Image...");
+      String? url = await CloudinaryService().uploadFile(File(image.path));
+      
+      if (url != null) {
+        await _sendMediaMessage(url, 'image');
+      } else {
+        _showSnack("Image Upload Failed");
+      }
     }
   }
 
@@ -802,6 +858,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                         }
                         if(pins.isEmpty) return const SizedBox();
 
+                        // 🟢 Validate Index & Get Current Pin
+                        if (_currentPinIndex >= pins.length) _currentPinIndex = 0;
+                        var currentPin = pins[_currentPinIndex];
+
                         return Container(
                           width: double.infinity,
                           height: 48, // Thoda sleek banaya
@@ -1043,7 +1103,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       direction: DismissDirection.startToEnd,
       
       // 🟢 FIX 1: CONTROLLED SWIPE (SLIDE THRESHOLD & SNAP BACK)
-      dismissThresholds: const {DismissDirection.startToEnd: 0.2}, 
+      dismissThresholds: const {DismissDirection.startToEnd: 0.15}, // Thoda kam kiya taaki jaldi trigger ho
       movementDuration: const Duration(milliseconds: 100), // Fast snap back
       
       confirmDismiss: (dir) async {

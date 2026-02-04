@@ -21,19 +21,26 @@ class _LoginScreenState extends State<LoginScreen> {
   bool isLoading = false;
 
   void submit() async {
+    String email = _emailController.text.trim();
+    String password = _passController.text.trim();
+    String username = _nameController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      _showErrorDialog("Please enter both email and password.");
+      return;
+    }
+
+    if (!isLogin && username.isEmpty) {
+      _showErrorDialog("Please enter a username.");
+      return;
+    }
+
     setState(() => isLoading = true);
     try {
       if (isLogin) {
-        await _auth.signIn(
-          _emailController.text.trim(), 
-          _passController.text.trim()
-        );
+        await _auth.signIn(email, password);
       } else {
-        await _auth.signUp(
-          _emailController.text.trim(), 
-          _passController.text.trim(),
-          _nameController.text.trim()
-        );
+        await _auth.signUp(email, password, username);
       }
       
       if (!mounted) return;
@@ -46,33 +53,43 @@ class _LoginScreenState extends State<LoginScreen> {
       if (e is FirebaseAuthException) {
         switch (e.code) {
           case 'user-not-found':
-          case 'invalid-credential':
-            errorMessage = "Account does not exist! Please create an account.";
+            errorMessage = "No account found with this email.";
             break;
           case 'wrong-password':
-            errorMessage = "Incorrect Password! Please try again.";
+            errorMessage = "Incorrect Password.";
+            break;
+          case 'invalid-credential':
+            errorMessage = "Invalid Email or Password.";
             break;
           case 'email-already-in-use':
-            errorMessage = "Email is already in use! Please login.";
+            errorMessage = "Email is already registered. Please login.";
+            break;
+          case 'invalid-email':
+            errorMessage = "Please enter a valid email address.";
+            break;
+          case 'weak-password':
+            errorMessage = "Password should be at least 6 characters.";
             break;
           default:
             errorMessage = e.message ?? "Authentication failed.";
         }
       }
 
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            backgroundColor: const Color(0xFF1E1E1E),
-            title: const Row(children: [Icon(Icons.error_outline, color: Colors.redAccent), SizedBox(width: 10), Text("Alert", style: TextStyle(color: Colors.white))]),
-            content: Text(errorMessage, style: const TextStyle(color: Colors.white70)),
-            actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK", style: TextStyle(color: Colors.blueAccent)))],
-          )
-        );
-      }
+      if (mounted) _showErrorDialog(errorMessage);
     }
     if (mounted) setState(() => isLoading = false);
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title: const Row(children: [Icon(Icons.error_outline, color: Colors.redAccent), SizedBox(width: 10), Text("Oops!", style: TextStyle(color: Colors.white))]),
+        content: Text(message, style: const TextStyle(color: Colors.white70)),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK", style: TextStyle(color: Colors.blueAccent)))],
+      )
+    );
   }
 
   @override

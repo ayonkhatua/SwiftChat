@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/database_service.dart';
 import 'login_screen.dart';
+import '../services/cloudinary_service.dart';
 import 'premium_screen.dart'; // 🟢 Premium Page Link
 
 class ProfileSettingsScreen extends StatefulWidget {
@@ -34,7 +36,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image != null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Uploading image...")));
-      await _dbService.updateUserProfile(user!.displayName ?? "User", image);
+      
+      // ☁️ Upload to Cloudinary
+      String? url = await CloudinaryService().uploadFile(File(image.path));
+      
+      if (url != null) {
+        // Update Firestore directly
+        await FirebaseFirestore.instance.collection('users').doc(user!.uid).update({'profile_pic': url});
+      }
     }
   }
 
