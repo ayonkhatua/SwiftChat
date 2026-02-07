@@ -819,7 +819,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // ️ RECORDING & AUDIO
   Future<void> _startRecording() async {
-    if (await Permission.microphone.request().isGranted) {
+    if (_isRecording) return; // 🟢 Fix: Prevent double start crash
+    
+    var status = await Permission.microphone.status;
+    if (status.isDenied) status = await Permission.microphone.request();
+
+    if (status.isGranted) {
       final Directory appDir = await getApplicationDocumentsDirectory();
       final String filePath = '${appDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _audioRecorder.start(const RecordConfig(), path: filePath);
@@ -833,12 +838,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         setState(() => _recordDuration++);
       });
 
+    } else if (status.isPermanentlyDenied) {
+      _showSnack("Microphone permission denied. Open Settings to enable.");
+      openAppSettings();
     } else {
       _showSnack("Microphone permission required!");
     }
   }
 
   Future<void> _stopAndSendRecording() async {
+    if (!_isRecording) return; // 🟢 Fix: Prevent stop if not recording
     _recordTimer?.cancel();
     final path = await _audioRecorder.stop();
     setState(() => _isRecording = false);
@@ -847,6 +856,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   // 🟢 Cancel Recording Logic
   Future<void> _cancelRecording() async {
+    if (!_isRecording) return;
     _recordTimer?.cancel();
     await _audioRecorder.stop();
     // File delete logic can be added here if needed, but stopping recorder is enough usually
@@ -866,7 +876,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _showUploadProgressDialog(progressController);
 
     String? url = await CloudinaryService().uploadFile(
-      file, isVideo: true,
+      file, type: 'video', // 🟢 Audio treated as video for Cloudinary
       onProgress: (count, total) => progressController.add(count / total),
     );
     
@@ -1045,7 +1055,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   void _sendImage() async {
     final ImagePicker picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+    // 🟢 Added imageQuality: 70 for compression (Faster Upload)
+    final XFile? image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
     if (image != null && mounted) _performImageUpload(File(image.path));
   }
 
@@ -1062,7 +1073,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _showUploadProgressDialog(progressController);
 
     String? url = await CloudinaryService().uploadFile(
-      file,
+      file, type: 'image',
       onProgress: (count, total) => progressController.add(count / total),
     );
     
@@ -1112,7 +1123,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _showUploadProgressDialog(progressController);
 
     String? url = await CloudinaryService().uploadFile(
-      file, isVideo: true,
+      file, type: 'video',
       onProgress: (count, total) => progressController.add(count / total),
     );
 
@@ -1147,7 +1158,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _showUploadProgressDialog(progressController);
 
     String? url = await CloudinaryService().uploadFile(
-      file,
+      file, type: 'raw', // 🟢 Fix: Upload documents as Raw
       onProgress: (count, total) => progressController.add(count / total),
     );
 
@@ -2580,27 +2591,31 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
   }
 
   void _initVideo() async {
-    _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.message.text));
-    await _videoController!.initialize();
-    
-    if (!mounted) return; // 🟢 Fix: Prevent setState after dispose
-    
-    _chewieController = ChewieController(
-      videoPlayerController: _videoController!,
-      autoPlay: true,
-      looping: false,
-      showControls: true, // 🟢 Explicitly enable controls (Play/Pause, Time)
-      aspectRatio: _videoController!.value.aspectRatio,
-      materialProgressColors: ChewieProgressColors(
-        playedColor: const Color(0xFF6A11CB),
-        handleColor: const Color(0xFF2575FC),
-        backgroundColor: Colors.white24,
-        bufferedColor: Colors.white54,
-      ),
-      placeholder: const Center(child: CircularProgressIndicator(color: Color(0xFF6A11CB))),
-    );
+    try {
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.message.text));
+      await _videoController!.initialize();
+      
+      if (!mounted) return; // 🟢 Fix: Prevent setState after dispose
+      
+      _chewieController = ChewieController(
+        videoPlayerController: _videoController!,
+        autoPlay: true,
+        looping: false,
+        showControls: true, // 🟢 Explicitly enable controls (Play/Pause, Time)
+        aspectRatio: _videoController!.value.aspectRatio,
+        materialProgressColors: ChewieProgressColors(
+          playedColor: const Color(0xFF6A11CB),
+          handleColor: const Color(0xFF2575FC),
+          backgroundColor: Colors.white24,
+          bufferedColor: Colors.white54,
+        ),
+        placeholder: const Center(child: CircularProgressIndicator(color: Color(0xFF6A11CB))),
+      );
 
-    setState(() => _isInitialized = true);
+      setState(() => _isInitialized = true);
+    } catch (e) {
+      print("Video Init Error: $e"); // 🟢 Fix: Handle invalid video URL crash
+    }
   }
 
   @override

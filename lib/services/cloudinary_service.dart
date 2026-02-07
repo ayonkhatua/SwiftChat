@@ -13,12 +13,18 @@ class CloudinaryService {
   }
 
   // 🟢 Image/Video Upload Function
-  Future<String?> uploadFile(File file, {bool isVideo = false, void Function(int count, int total)? onProgress}) async {
+  Future<String?> uploadFile(File file, {String type = 'image', void Function(int count, int total)? onProgress}) async {
     try {
+      CloudinaryResourceType resourceType;
+      if (type == 'video') resourceType = CloudinaryResourceType.Video;
+      else if (type == 'raw') resourceType = CloudinaryResourceType.Raw;
+      else if (type == 'auto') resourceType = CloudinaryResourceType.Auto;
+      else resourceType = CloudinaryResourceType.Image;
+
       CloudinaryResponse response = await cloudinary.uploadFile(
         CloudinaryFile.fromFile(
           file.path,
-          resourceType: isVideo ? CloudinaryResourceType.Video : CloudinaryResourceType.Image,
+          resourceType: resourceType,
         ),
         onProgress: onProgress,
       );

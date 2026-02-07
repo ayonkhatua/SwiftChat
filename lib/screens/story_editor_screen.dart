@@ -98,7 +98,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
 
       String? url = await CloudinaryService().uploadFile(
         widget.file, 
-        isVideo: widget.type == 'video',
+        type: widget.type,
         onProgress: (count, total) {
           setState(() => _uploadProgress = count / total);
         },
