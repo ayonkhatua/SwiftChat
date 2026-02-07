@@ -1832,8 +1832,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                                       DateTime lastActive = DateTime.fromMillisecondsSinceEpoch(lastChanged);
                                                       Duration diff = DateTime.now().difference(lastActive);
 
-                                                      if (diff.inMinutes < 1) statusText = "Active just now";
-                                                      else if (diff.inMinutes < 60) statusText = "Active ${diff.inMinutes}m ago";
+                                                      if (diff.inMinutes < 1) {
+                                                        statusText = "Active just now";
+                                                      } else if (diff.inMinutes < 60) statusText = "Active ${diff.inMinutes}m ago";
                                                       else if (diff.inHours < 24) statusText = "Active ${diff.inHours}h ago";
                                                       else statusText = "Active ${diff.inDays}d ago";
                                                     }

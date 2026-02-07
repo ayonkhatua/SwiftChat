@@ -16,8 +16,9 @@ class CloudinaryService {
   Future<String?> uploadFile(File file, {String type = 'image', void Function(int count, int total)? onProgress}) async {
     try {
       CloudinaryResourceType resourceType;
-      if (type == 'video') resourceType = CloudinaryResourceType.Video;
-      else if (type == 'raw') resourceType = CloudinaryResourceType.Raw;
+      if (type == 'video') {
+        resourceType = CloudinaryResourceType.Video;
+      } else if (type == 'raw') resourceType = CloudinaryResourceType.Raw;
       else if (type == 'auto') resourceType = CloudinaryResourceType.Auto;
       else resourceType = CloudinaryResourceType.Image;
 
