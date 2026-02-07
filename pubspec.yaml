@@ -10,44 +10,49 @@ dependencies:
   flutter:
     sdk: flutter
   
-  # Firebase Core & Auth
-  firebase_core: ^2.27.1
-  firebase_auth: ^4.17.6
-  cloud_firestore: ^4.15.6
-  firebase_database: ^10.4.0
-  firebase_storage: ^11.7.7 # Ise rehne diya hai backup ke liye
-  firebase_messaging: ^14.9.4
+  # 🟢 Firebase (Upgraded to match File Picker)
+  firebase_core: ^3.4.0   # Upgrade zaroori hai
+  firebase_auth: ^5.2.0
+  cloud_firestore: ^5.3.0
+  firebase_database: ^11.0.0
+  firebase_storage: ^12.2.0
+  firebase_messaging: ^15.1.0
   
-  # 🟢 Cloudinary (New Media Handler)
+  # Cloudinary
   cloudinary_public: ^0.23.1
 
-  # 🎥 Video Playback
-  video_player: ^2.8.1
-  chewie: ^1.7.1
+  # Video Playback
+  video_player: ^2.9.1
+  chewie: ^1.8.5
 
   # UI & Utilities
   provider: ^6.1.1
   intl: ^0.19.0
-  google_fonts: ^6.1.0
-  image_picker: ^1.2.1
-  cached_network_image: ^3.4.0
-  file_picker: ^8.0.0
-  url_launcher: ^6.2.5
-  flutter_local_notifications: ^20.0.0
-  http: ^1.6.0
-  googleapis_auth: ^1.4.1
+  google_fonts: ^6.2.1
+  image_picker: ^1.1.2
+  cached_network_image: ^3.4.1
+  
+  # 🟢 Correct Version (Stable)
+  flutter_local_notifications: ^17.2.2 
+  
+  http: ^1.2.2
+  googleapis_auth: ^1.6.0
   qr_flutter: ^4.1.0
+  url_launcher: ^6.3.0
+  
+  # 🟢 File Picker (Latest - compatible with new Firebase)
+  file_picker: ^8.1.7
 
   # Audio & Permissions
   record: ^6.0.0
-  audioplayers: ^6.5.1
-  path_provider: ^2.1.5
+  audioplayers: ^6.1.0
+  path_provider: ^2.1.4
   permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^2.0.0
+  flutter_lints: ^3.0.0
 
 flutter:
   uses-material-design: true

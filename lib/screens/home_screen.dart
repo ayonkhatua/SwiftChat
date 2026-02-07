@@ -8,13 +8,13 @@ import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/database_service.dart';
-import '../services/notification_service.dart';
+// import '../services/notification_service.dart'; // 🔴 Paused
 import 'chat_screen.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
 import 'create_group_screen.dart';
 import 'premium_screen.dart';
-import 'profile_settings_screen.dart'; // FullScreenProfileViewer ke liye
+// FullScreenProfileViewer ke liye
 import 'wallet_screen.dart';
 import 'story_editor_screen.dart';
 import 'story_view_screen.dart'; // 🟢 Added for viewing stories
@@ -29,11 +29,11 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   final DatabaseService _dbService = DatabaseService();
-  final NotificationService _notificationService = NotificationService();
+  // final NotificationService _notificationService = NotificationService(); // 🔴 Paused
 
   // Pages List
   final List<Widget> _pages = [
-    RecentChatsPage(),       
+    const RecentChatsPage(),       
     const SearchPage(),      
     const ProfilePage(),     
   ];
@@ -42,7 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _dbService.setupPresenceSystem();
-    _notificationService.initNotifications();
+    // _notificationService.initNotifications(); // 🔴 Paused
   }
 
   void _handleLogout() async {
@@ -441,7 +441,7 @@ class _RecentChatsPageState extends State<RecentChatsPage> {
                     builder: (context, userSnap) {
                       int membershipLevel = 0; // Default Free
                       
-                      if(userSnap.hasData && userSnap.data!.exists) {
+                      if(userSnap.hasData && userSnap.data != null && userSnap.data!.exists) {
                         var userData = userSnap.data!.data() as Map<String, dynamic>;
                         membershipLevel = userData['membershipLevel'] ?? 0;
                         if(!isGroup && userData['profile_pic'] != null) image = userData['profile_pic'];

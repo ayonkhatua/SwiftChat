@@ -35,6 +35,7 @@ class _ChannelInfoScreenState extends State<ChannelInfoScreen> {
         } else {
           // 🛑 Rokaawat: Premium Screen pheko
           Navigator.push(context, MaterialPageRoute(builder: (_) => const PremiumScreen()));
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Need 5000+ members or Premium to hide list!")));
         }
       }

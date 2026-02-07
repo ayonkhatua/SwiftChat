@@ -53,6 +53,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _isRecording = false;
   String? _currentlyPlayingUrl;
   bool _isPlaying = false;
+  Timer? _recordTimer;
+  int _recordDuration = 0;
   
   // UI State
   bool _isTyping = false;
@@ -64,6 +66,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   // 🟢 Search State
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
+
+  // 🟢 Selection Mode State
+  bool _isSelectionMode = false;
+  final Set<String> _selectedMessageIds = {};
   
   // Reply, Edit & Highlight State
   Message? _replyMessage;
@@ -91,6 +97,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   //  Animation Controller for Voice Wave
   late AnimationController _waveController;
 
+  // 🟢 Stream Subscriptions (Professional Memory Management)
+  StreamSubscription? _blockSubscription;
+  StreamSubscription? _muteSubscription;
+  StreamSubscription? _playerSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -117,7 +128,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       }
     });
 
-    _audioPlayer.onPlayerComplete.listen((event) {
+    _playerSubscription = _audioPlayer.onPlayerComplete.listen((event) {
       if(mounted) {
         setState(() {
           _currentlyPlayingUrl = null;
@@ -135,6 +146,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _blockSubscription?.cancel();
+    _muteSubscription?.cancel();
+    _playerSubscription?.cancel();
+    _recordTimer?.cancel();
     _waveController.dispose();
     _audioRecorder.dispose();
     _audioPlayer.dispose();
@@ -153,13 +168,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         : "${widget.receiverId}_${FirebaseAuth.instance.currentUser!.uid}");
 
   void _checkBlockStatus() {
-    _dbService.isUserBlocked(widget.receiverId).listen((isBlocked) {
+    _blockSubscription = _dbService.isUserBlocked(widget.receiverId).listen((isBlocked) {
       if(mounted) setState(() => _isBlocked = isBlocked);
     });
   }
 
   void _checkMuteStatus() {
-    _dbService.isChatMuted(widget.receiverId).listen((isMuted) {
+    _muteSubscription = _dbService.isChatMuted(widget.receiverId).listen((isMuted) {
       if(mounted) setState(() => _isMuted = isMuted);
     });
   }
@@ -329,8 +344,31 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
-              onPressed: () {
+              onPressed: () async {
                 Navigator.pop(context);
+                
+                // 🟢 Auto-Unpin Logic: Remove from pinnedMessages if deleted
+                String chatId = widget.isGroup 
+                    ? widget.receiverId 
+                    : (FirebaseAuth.instance.currentUser!.uid.compareTo(widget.receiverId) < 0 
+                        ? "${FirebaseAuth.instance.currentUser!.uid}_${widget.receiverId}" 
+                        : "${widget.receiverId}_${FirebaseAuth.instance.currentUser!.uid}");
+
+                try {
+                  DocumentSnapshot chatDoc = await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
+                  if (chatDoc.exists) {
+                    List pins = (chatDoc.data() as Map<String, dynamic>)['pinnedMessages'] ?? [];
+                    var pinData = pins.firstWhere((p) => p['id'] == docId, orElse: () => null);
+                    if (pinData != null) {
+                      await FirebaseFirestore.instance.collection('chats').doc(chatId).update({
+                        'pinnedMessages': FieldValue.arrayRemove([pinData])
+                      });
+                    }
+                  }
+                } catch (e) {
+                  print("Error unpinning message: $e");
+                }
+
                 setState(() => _deletingMessageId = docId);
                 Future.delayed(const Duration(milliseconds: 400), () {
                   _dbService.deleteForEveryone(widget.receiverId, docId);
@@ -414,6 +452,22 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     String chatId = widget.isGroup 
         ? widget.receiverId 
         : (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
+
+    // 🟢 1. Check Pin Limit (20 for Free, Unlimited for VIP)
+    DocumentSnapshot chatDoc = await FirebaseFirestore.instance.collection('chats').doc(chatId).get();
+    List currentPins = [];
+    if (chatDoc.exists && (chatDoc.data() as Map).containsKey('pinnedMessages')) {
+      currentPins = (chatDoc.data() as Map)['pinnedMessages'] ?? [];
+    }
+
+    bool isPremium = await _dbService.isUserPremium();
+    int limit = isPremium ? 999999 : 20; 
+
+    if (currentPins.length >= limit) {
+      _showSnack("Pin limit reached! ${isPremium ? "" : "Upgrade for unlimited."}");
+      if (!isPremium) _showPremiumLockDialog();
+      return;
+    }
 
     Timestamp? expiry;
     if (days != -1) {
@@ -630,7 +684,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   // ☁️ CLOUDINARY & FIRESTORE DIRECT SEND
-  Future<void> _sendMediaMessage(String url, String type, {String? fileName}) async {
+  Future<void> _sendMediaMessage(String url, String type, {String? fileName, String? duration}) async {
     User? user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
@@ -643,7 +697,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     Map<String, dynamic> messageData = {
       'senderId': user.uid,
       'senderName': widget.isGroup ? (user.displayName ?? "Member") : user.displayName,
-      'text': url, // Cloudinary URL
+      'text': type == 'audio' && duration != null ? "$url|||$duration" : url, // 🟢 Store Duration with URL
       'type': type, // 'image' or 'audio'
       'timestamp': FieldValue.serverTimestamp(),
       'isRead': false,
@@ -656,8 +710,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
     // Update Last Message
     String lastMsgText = "Media";
-    if (type == 'image') lastMsgText = "📷 Photo";
-    else if (type == 'video') lastMsgText = "🎥 Video";
+    if (type == 'image') {
+      lastMsgText = "📷 Photo";
+    } else if (type == 'video') lastMsgText = "🎥 Video";
     else if (type == 'audio') lastMsgText = "🎤 Voice Note";
     else if (type == 'document') lastMsgText = "📄 Document";
 
@@ -768,19 +823,37 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       final Directory appDir = await getApplicationDocumentsDirectory();
       final String filePath = '${appDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       await _audioRecorder.start(const RecordConfig(), path: filePath);
-      setState(() => _isRecording = true);
+      
+      // 🟢 Start Timer
+      setState(() {
+        _isRecording = true;
+        _recordDuration = 0;
+      });
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        setState(() => _recordDuration++);
+      });
+
     } else {
       _showSnack("Microphone permission required!");
     }
   }
 
   Future<void> _stopAndSendRecording() async {
+    _recordTimer?.cancel();
     final path = await _audioRecorder.stop();
     setState(() => _isRecording = false);
-    if (path != null) _performAudioUpload(File(path));
+    if (path != null) _performAudioUpload(File(path), _formatDuration(_recordDuration));
   }
 
-  void _performAudioUpload(File file) async {
+  // 🟢 Cancel Recording Logic
+  Future<void> _cancelRecording() async {
+    _recordTimer?.cancel();
+    await _audioRecorder.stop();
+    // File delete logic can be added here if needed, but stopping recorder is enough usually
+    setState(() => _isRecording = false);
+  }
+
+  void _performAudioUpload(File file, String duration) async {
     // 🟢 CHECK FILE SIZE LIMIT
     int size = await file.length();
     var limits = await _dbService.getUserLimits();
@@ -801,24 +874,37 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (mounted) Navigator.pop(context);
 
     if (url != null) {
-      await _sendMediaMessage(url, 'audio');
+      await _sendMediaMessage(url, 'audio', duration: duration);
     } else {
-      _showRetrySnack("Audio Upload Failed", () => _performAudioUpload(file));
+      _showRetrySnack("Audio Upload Failed", () => _performAudioUpload(file, duration));
     }
   }
 
   Future<void> _playAudio(String url) async {
-    if (_currentlyPlayingUrl == url && _isPlaying) {
-      await _audioPlayer.pause();
-      setState(() => _isPlaying = false);
-    } else {
-      await _audioPlayer.stop();
-      await _audioPlayer.play(UrlSource(url));
-      setState(() {
-        _currentlyPlayingUrl = url;
-        _isPlaying = true;
-      });
+    // 🟢 Handle URL with Duration (Format: url|||duration)
+    String cleanUrl = url.split('|||')[0];
+    try {
+      if (_currentlyPlayingUrl == cleanUrl && _isPlaying) {
+        await _audioPlayer.pause();
+        setState(() => _isPlaying = false);
+      } else {
+        await _audioPlayer.stop();
+        await _audioPlayer.play(UrlSource(cleanUrl));
+        setState(() {
+          _currentlyPlayingUrl = cleanUrl;
+          _isPlaying = true;
+        });
+      }
+    } catch (e) {
+      _showSnack("Error playing audio: $e");
     }
+  }
+
+  // 🟢 Helper: Format Duration (0:00)
+  String _formatDuration(int seconds) {
+    int min = seconds ~/ 60;
+    int sec = seconds % 60;
+    return "$min:${sec.toString().padLeft(2, '0')}";
   }
 
   // 🖼️ FULL SCREEN MEDIA VIEWER
@@ -858,8 +944,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               onPrimary: Colors.white,
               surface: Color(0xFF1E1E1E),
               onSurface: Colors.white,
-            ),
-            dialogBackgroundColor: const Color(0xFF1E1E1E),
+            ), dialogTheme: const DialogThemeData(backgroundColor: Color(0xFF1E1E1E)),
           ),
           child: child!,
         );
@@ -912,16 +997,32 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     String text = _messageController.text.trim();
     if (text.isEmpty) return;
     
-    if (_editingMessage != null) {
+    // 🟢 Fix: Capture data & Clear UI immediately
+    Map<String, dynamic>? replyData;
+    if (_replyMessage != null) {
+      replyData = {
+        'text': _replyMessage!.type == 'image' ? "📷 Photo" : (_replyMessage!.type == 'audio' ? "🎤 Voice Note" : _replyMessage!.text),
+        'sender': _replyMessage!.senderName,
+        'id': _replyMessage!.messageId
+      };
+    }
+
+    bool isEditing = _editingMessage != null;
+    String? editingId = _editingMessage?.messageId;
+
+    _messageController.clear();
+    setState(() {
+      _replyMessage = null;
+      _editingMessage = null;
+    });
+
+    if (isEditing) {
       String currentUserId = FirebaseAuth.instance.currentUser!.uid;
       String chatId = widget.isGroup ? widget.receiverId : 
         (currentUserId.compareTo(widget.receiverId) < 0 ? "${currentUserId}_${widget.receiverId}" : "${widget.receiverId}_$currentUserId");
       
       await FirebaseFirestore.instance.collection('chats').doc(chatId)
-          .collection('messages').doc(_editingMessage!.messageId).update({'text': text});
-      
-      setState(() => _editingMessage = null);
-      _messageController.clear();
+          .collection('messages').doc(editingId).update({'text': text});
       return;
     }
 
@@ -936,22 +1037,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       text, 
       widget.receiverName, 
       isGroup: widget.isGroup,
-      replyTo: _replyMessage != null ? {
-        'text': _replyMessage!.type == 'image' ? "📷 Photo" : (_replyMessage!.type == 'audio' ? "🎤 Voice Note" : _replyMessage!.text),
-        'sender': _replyMessage!.senderName,
-        'id': _replyMessage!.messageId
-      } : null,
+      replyTo: replyData,
     );
 
-    _messageController.clear();
-    setState(() => _replyMessage = null);
     _scrollToBottom();
   }
 
   void _sendImage() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-    if (image != null) _performImageUpload(File(image.path));
+    if (image != null && mounted) _performImageUpload(File(image.path));
   }
 
   void _performImageUpload(File file) async {
@@ -990,7 +1085,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       source: ImageSource.gallery,
       maxDuration: Duration(seconds: maxSecs),
     );
-    if (video != null) {
+    if (video != null && mounted) {
       // 🟢 Check duration for gallery videos
       final VideoPlayerController tempController = VideoPlayerController.file(File(video.path));
       await tempController.initialize();
@@ -1033,7 +1128,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   void _sendDocument() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles();
-    if (result != null && result.files.single.path != null) {
+    if (result != null && result.files.single.path != null && mounted) {
       String fileName = result.files.single.name;
       _performDocumentUpload(File(result.files.single.path!), fileName);
     }
@@ -1276,7 +1371,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                   child: Text(e, style: const TextStyle(fontSize: 28)),
                                 ),
                               )
-                            ).toList(),
+                            ),
                             GestureDetector(
                               onTap: () {
                                 Navigator.pop(context);
@@ -1338,9 +1433,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                 },
                                 isDestructive: isAlreadyPinned,
                               ), 
-                              _buildMenuItem(Icons.delete_outline, "Delete", () { 
+                              _buildMenuItem(Icons.delete_outline, "Delete for me", () { 
                                 Navigator.pop(context); 
-                                _confirmDeletion(msg, docId); 
+                                _enterSelectionMode(initialMessageId: msg.messageId); // 🟢 Auto-select this message
                               }, isDestructive: true),
                               
                               if (msg.senderId == FirebaseAuth.instance.currentUser!.uid) ...[
@@ -1422,6 +1517,172 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     if (image != null) setState(() => _wallpaperImage = image.path);
   }
 
+  // 🟢 Helper: Professional Time Formatting (12-hour AM/PM)
+  String _formatTime(DateTime dt) {
+    String hour = (dt.hour > 12 ? dt.hour - 12 : (dt.hour == 0 ? 12 : dt.hour)).toString();
+    String minute = dt.minute.toString().padLeft(2, '0');
+    String period = dt.hour >= 12 ? 'PM' : 'AM';
+    return "$hour:$minute $period";
+  }
+
+  // 🟢 Helper: Date Header Logic
+  String _getDateHeader(DateTime dt) {
+    DateTime now = DateTime.now();
+    DateTime today = DateTime(now.year, now.month, now.day);
+    DateTime yesterday = today.subtract(const Duration(days: 1));
+    DateTime dateToCheck = DateTime(dt.year, dt.month, dt.day);
+
+    if (dateToCheck == today) return "Today";
+    if (dateToCheck == yesterday) return "Yesterday";
+    
+    if (now.difference(dt).inDays < 7) {
+      const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+      return days[dt.weekday - 1];
+    }
+    return "${dt.day.toString().padLeft(2,'0')}/${dt.month.toString().padLeft(2,'0')}/${dt.year}";
+  }
+
+  // 🟢 Helper: Time Ago for Sent/Seen
+  String _timeAgo(DateTime d) {
+    Duration diff = DateTime.now().difference(d);
+    if (diff.inMinutes < 1) return "Just now";
+    if (diff.inMinutes < 60) return "${diff.inMinutes}m ago";
+    if (diff.inHours < 24) return "${diff.inHours}h ago";
+    return "${diff.inDays}d ago";
+  }
+
+  // 🟢 Selection Mode Logic
+  void _enterSelectionMode({String? initialMessageId}) {
+    setState(() {
+      _isSelectionMode = true;
+      _selectedMessageIds.clear();
+      if (initialMessageId != null) {
+        _selectedMessageIds.add(initialMessageId);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    setState(() {
+      _isSelectionMode = false;
+      _selectedMessageIds.clear();
+    });
+  }
+
+  void _toggleSelection(String messageId) {
+    setState(() {
+      if (_selectedMessageIds.contains(messageId)) {
+        _selectedMessageIds.remove(messageId);
+      } else {
+        _selectedMessageIds.add(messageId);
+      }
+    });
+  }
+
+  void _deleteSelectedMessages() async {
+    if (_selectedMessageIds.isEmpty) return;
+    
+    for (String id in _selectedMessageIds) {
+      await _dbService.deleteForMe(widget.receiverId, id);
+    }
+    
+    _exitSelectionMode();
+    _showSnack("Messages deleted for you");
+  }
+
+  // 🟢 NEW: Sender Side Menu (Dummy Implementation)
+  void _showMyMessageMenu(Message msg) {
+    bool canEdit = msg.type == 'text' && DateTime.now().difference(msg.timestamp.toDate()).inMinutes < 15;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(2)),
+              ),
+              if (canEdit)
+                _buildMenuOption(Icons.edit, "Edit", () { 
+                  Navigator.pop(context);
+                  setState(() { 
+                    _editingMessage = msg; 
+                    _messageController.text = msg.text; 
+                  }); 
+                }),
+              _buildMenuOption(Icons.forward, "Forward", () => _forwardMessage(msg)),
+              _buildMenuOption(Icons.copy, "Copy", () { 
+                Clipboard.setData(ClipboardData(text: msg.text)); 
+                Navigator.pop(context);
+                _showSnack("Copied!");
+              }),
+              _buildMenuOption(Icons.undo, "Unsend", () { 
+                Navigator.pop(context);
+                _confirmDeletion(msg, msg.messageId);
+              }),
+              _buildMenuOption(Icons.push_pin, "Pin", () { 
+                Navigator.pop(context);
+                _showPinDurationOptions(msg);
+              }),
+              _buildMenuOption(Icons.delete_outline, "Delete for me", () { 
+                Navigator.pop(context); 
+                _enterSelectionMode(initialMessageId: msg.messageId); // 🟢 Auto-select this message
+              }, isDestructive: true),
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  // 🟢 NEW: Receiver Side Menu
+  void _showReceiverMessageMenu(Message msg) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 20),
+                decoration: BoxDecoration(color: Colors.grey[700], borderRadius: BorderRadius.circular(2)),
+              ),
+              _buildMenuOption(Icons.forward, "Forward", () => _forwardMessage(msg)),
+              _buildMenuOption(Icons.push_pin, "Pin", () { 
+                Navigator.pop(context);
+                _showPinDurationOptions(msg);
+              }),
+              _buildMenuOption(Icons.delete_outline, "Delete for me", () { 
+                Navigator.pop(context); 
+                _enterSelectionMode(initialMessageId: msg.messageId); 
+              }, isDestructive: true),
+            ],
+          ),
+        );
+      }
+    );
+  }
+
+  Widget _buildMenuOption(IconData icon, String label, VoidCallback onTap, {bool isDestructive = false}) {
+    return ListTile(
+      leading: Icon(icon, color: isDestructive ? Colors.redAccent : Colors.white),
+      title: Text(label, style: TextStyle(color: isDestructive ? Colors.redAccent : Colors.white)),
+      onTap: onTap,
+    );
+  }
+
   // ---------------------------------------------------
   // 🟢 4. BUILD UI (Scaffold)
   // ---------------------------------------------------
@@ -1447,7 +1708,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                      child: _isSearching 
+                      child: _isSelectionMode 
+                      ? Row( // 🟢 Selection Mode Header
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.white),
+                              onPressed: _exitSelectionMode,
+                            ),
+                            Expanded(
+                              child: Text(
+                                "${_selectedMessageIds.length} Selected",
+                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                              onPressed: _selectedMessageIds.isEmpty ? null : _deleteSelectedMessages,
+                            ),
+                          ],
+                        )
+                      : _isSearching 
                       ? Row(
                           children: [
                             IconButton(
@@ -1529,9 +1809,25 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                                                 return StreamBuilder<DatabaseEvent>(
                                                   stream: _dbService.getUserStatus(widget.receiverId),
                                                   builder: (context, statSnap) {
-                                                    if(!statSnap.hasData || statSnap.data!.snapshot.value == null) return const Text("Offline", style: TextStyle(fontSize: 12, color: Colors.grey));
+                                                    if(!statSnap.hasData || statSnap.data!.snapshot.value == null) return const SizedBox();
                                                     var val = statSnap.data!.snapshot.value as Map;
-                                                    return Text(val['state'] == 'online' ? "Active now" : "Offline", style: TextStyle(fontSize: 12, color: val['state'] == 'online' ? Colors.greenAccent : Colors.grey));
+                                                    bool isOnline = val['state'] == 'online';
+                                                    String statusText = "Offline";
+
+                                                    if (isOnline) {
+                                                      statusText = "Active now";
+                                                    } else if (val['last_changed'] != null) {
+                                                      int lastChanged = val['last_changed'];
+                                                      DateTime lastActive = DateTime.fromMillisecondsSinceEpoch(lastChanged);
+                                                      Duration diff = DateTime.now().difference(lastActive);
+
+                                                      if (diff.inMinutes < 1) statusText = "Active just now";
+                                                      else if (diff.inMinutes < 60) statusText = "Active ${diff.inMinutes}m ago";
+                                                      else if (diff.inHours < 24) statusText = "Active ${diff.inHours}h ago";
+                                                      else statusText = "Active ${diff.inDays}d ago";
+                                                    }
+                                                    
+                                                    return Text(statusText, style: TextStyle(fontSize: 12, color: isOnline ? Colors.greenAccent : Colors.grey));
                                                   }
                                                 );
                                               },
@@ -1695,8 +1991,47 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           reverse: true,
                           itemCount: displayMessages.length,
                           itemBuilder: (context, index) {
-                            // 🟢 Pass Gradient to Bubble
-                            return _buildMessageItem(displayMessages[index], _getThemeGradient());
+                            Message msg = displayMessages[index];
+                            bool showDateHeader = false;
+                            
+                            if (index == displayMessages.length - 1) {
+                              showDateHeader = true;
+                            } else {
+                              DateTime current = msg.timestamp.toDate();
+                              DateTime prev = displayMessages[index + 1].timestamp.toDate();
+                              if (current.year != prev.year || current.month != prev.month || current.day != prev.day) {
+                                showDateHeader = true;
+                              }
+                            }
+
+                            Widget messageWidget = _buildMessageItem(msg, _getThemeGradient(), isLastMessage: index == 0);
+
+                            if (showDateHeader) {
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 15),
+                                    child: Center(
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1E1E1E).withOpacity(0.8),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: Colors.white10)
+                                        ),
+                                        child: Text(
+                                          _getDateHeader(msg.timestamp.toDate()),
+                                          style: const TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  messageWidget,
+                                ],
+                              );
+                            }
+                            return messageWidget;
                           },
                         ),
                         if (_showScrollToBottomBtn)
@@ -1749,20 +2084,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   ),
                 ),
 
-              // 🟢 INPUT AREA (UPDATED WITH LIVE VOICE)
-              _isBlocked 
+              // 🟢 INPUT AREA (Hidden in Selection Mode)
+              (_isBlocked || _isSelectionMode)
               ? Container(padding: const EdgeInsets.all(15), child: const Text("You blocked this user.", style: TextStyle(color: Colors.redAccent)))
               : Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     color: Colors.black87, 
-                    border: const Border(top: BorderSide(color: Colors.white12))
+                    border: Border(top: BorderSide(color: Colors.white12))
                   ),
                   child: Row(
                     children: [
                       // 🔴 LIVE RECORDING UI
                       if (_isRecording) ...[
-                        const Icon(Icons.mic, color: Colors.redAccent),
+                        // 🟢 Delete/Cancel Button
+                        IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.white),
+                          onPressed: _cancelRecording,
+                        ),
+                        // 🟢 Timer Text
+                        Text(_formatDuration(_recordDuration), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                         const SizedBox(width: 15),
                         
                         // Animated Waveform
@@ -1793,9 +2134,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           ),
                         ),
                         
-                        const SizedBox(width: 10),
-                        // Timer (You can add real timer logic here later)
-                        const Text("Recording...", style: TextStyle(color: Colors.white, fontSize: 12)),
                         const SizedBox(width: 10),
                         
                         // Stop & Send
@@ -1850,10 +2188,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildMessageItem(Message msg, Gradient? themeGradient) {
+  Widget _buildMessageItem(Message msg, Gradient? themeGradient, {bool isLastMessage = false}) {
     bool isMe = msg.senderId == FirebaseAuth.instance.currentUser!.uid;
     DateTime dt = msg.timestamp.toDate();
-    String timeString = "${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
+    String timeString = _formatTime(dt); // 🟢 Used Professional Time Format
     Map<String, int> reactionCounts = {};
     msg.reactions.forEach((key, value) => reactionCounts[value] = (reactionCounts[value] ?? 0) + 1);
 
@@ -1862,15 +2200,14 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     bool isMedia = msg.type == 'image' || msg.type == 'video' || msg.type == 'document';
     bool isPoll = msg.type == 'poll';
     bool isSticker = msg.type == 'sticker';
+    bool isVisual = msg.type == 'image' || msg.type == 'video' || msg.type == 'sticker' || msg.type == 'document'; // 🟢 Images/Videos/Stickers/Docs (No Bubble)
 
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeInOutBack,
-      child: isDeleting 
-      ? const SizedBox(width: double.infinity, height: 0)
-      : Dismissible(
+    Widget messageContent = Column(
+          crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          children: [
+            Dismissible(
       key: Key(msg.messageId),
-      direction: DismissDirection.startToEnd,
+      direction: _isSelectionMode ? DismissDirection.none : DismissDirection.startToEnd, // 🟢 Disable swipe in selection mode
       
       // 🟢 FIX 1: CONTROLLED SWIPE (SLIDE THRESHOLD & SNAP BACK)
       dismissThresholds: const {DismissDirection.startToEnd: 0.1}, // Aur kam kiya taaki thoda sa slide karne par hi reply ho jaye
@@ -1895,17 +2232,24 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       ),
       child: GestureDetector(
         onTap: () {
-          if (msg.type == 'document') {
+          if (_isSelectionMode) {
+            _toggleSelection(msg.messageId); // 🟢 Toggle selection
+          } else if (msg.type == 'document') {
             _openDocument(msg.text);
           } else if (isMedia) {
             _openFullScreenMedia(msg);
           } else {
-            _showMessageOptions(msg, msg.messageId);
+            // Tap action removed for text messages to keep UI clean
           }
         },
         onLongPress: () {
+          if (_isSelectionMode) return; // 🟢 Disable long press in selection mode
           HapticFeedback.heavyImpact();
-          _showMessageOptions(msg, msg.messageId);
+          if (isMe) {
+            _showMyMessageMenu(msg);
+          } else {
+            _showReceiverMessageMenu(msg);
+          }
         },
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 300),
@@ -1920,12 +2264,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: isVisual ? EdgeInsets.zero : const EdgeInsets.all(12), // 🟢 Remove padding for visuals
                   decoration: BoxDecoration(
-                    gradient: (isMe && !isMedia && !isPoll && !isSticker) ? (themeGradient ?? const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)])) : null,
-                    color: (isMedia || isSticker) ? Colors.transparent : (isMe && !isPoll ? null : const Color(0xFF2A2A2A)),
+                    gradient: (isMe && !isVisual && !isPoll) ? (themeGradient ?? const LinearGradient(colors: [Color(0xFF6A11CB), Color(0xFF2575FC)])) : null,
+                    color: isVisual ? Colors.transparent : (isMe && !isPoll ? null : const Color(0xFF2A2A2A)),
                     borderRadius: BorderRadius.only(topLeft: const Radius.circular(18), topRight: const Radius.circular(18), bottomLeft: isMe ? const Radius.circular(18) : const Radius.circular(4), bottomRight: isMe ? const Radius.circular(4) : const Radius.circular(18)),
-                    border: (isMedia || isSticker) ? null : Border.all(color: Colors.white10),
+                    border: isVisual ? null : Border.all(color: Colors.white10),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2014,30 +2358,75 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                           ],
                         )
                       else if (msg.type == 'document')
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(color: Colors.blueAccent.withOpacity(0.1), shape: BoxShape.circle),
-                              child: const Icon(Icons.insert_drive_file, color: Colors.blueAccent, size: 24),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(msg.fileName ?? "Document", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                                const Text("Tap to download/open", style: TextStyle(color: Colors.white54, fontSize: 11)),
-                              ],
-                            ),
-                          ],
-                        )
-                      else if (msg.type == 'audio')
                         Container(
-                          width: 150,
-                          padding: const EdgeInsets.all(5),
-                          child: Row(children: [GestureDetector(onTap: () => _playAudio(msg.text), child: Icon((_currentlyPlayingUrl == msg.text && _isPlaying) ? Icons.pause_circle_filled : Icons.play_circle_fill, color: Colors.white, size: 30)), const SizedBox(width: 10), Expanded(child: Container(height: 3, color: Colors.white54))]),
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1E1E).withOpacity(0.9), // Standalone file card
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.white12)
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.insert_drive_file, color: Colors.redAccent, size: 28),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  msg.fileName ?? "Document", 
+                                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
                         )
+                      else if (msg.type == 'audio') ...[
+                        // 🟢 AUDIO MESSAGE UI (Waveform + Duration)
+                        Builder(
+                          builder: (context) {
+                            List<String> parts = msg.text.split('|||');
+                            String url = parts[0];
+                            String duration = parts.length > 1 ? parts[1] : "0:00";
+                            bool isPlayingThis = _currentlyPlayingUrl == url && _isPlaying;
+
+                            return Container(
+                              width: 200,
+                              padding: const EdgeInsets.all(5),
+                              child: Row(
+                                children: [
+                                  GestureDetector(
+                                    onTap: () => _playAudio(msg.text),
+                                    child: Icon(isPlayingThis ? Icons.pause_circle_filled : Icons.play_circle_fill, color: Colors.white, size: 35)
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        // 🟢 Visual Waveform (Simulated Bars)
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                          children: List.generate(20, (i) => Container(
+                                            width: 3,
+                                            height: 10 + (i % 3 == 0 ? 10.0 : (i % 2 == 0 ? 5.0 : 15.0)), // Random-ish heights
+                                            decoration: BoxDecoration(
+                                              color: isPlayingThis ? Colors.white : Colors.white54,
+                                              borderRadius: BorderRadius.circular(2)
+                                            ),
+                                          )),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(duration, style: const TextStyle(color: Colors.white70, fontSize: 10)),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                        )
+                      ]
                       else if (msg.type == 'poll' && msg.pollData != null)
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2098,17 +2487,6 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                       
                       Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.end, children: [
                         Text(timeString, style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                        if(isMe) ...[
-                          const SizedBox(width: 5),
-                          Text(
-                            msg.isRead ? "Seen" : "Sent", 
-                            style: TextStyle(
-                              color: msg.isRead ? Colors.white70 : Colors.white30, 
-                              fontSize: 10, 
-                              fontWeight: FontWeight.bold
-                            )
-                          )
-                        ]
                       ]),
                     ],
                   ),
@@ -2131,7 +2509,51 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         ),
         ),
       ),
-    ));
+      ),
+      if (isMe && isLastMessage)
+        Padding(
+          padding: const EdgeInsets.only(top: 4, right: 10, bottom: 5),
+          child: Text(
+            "${msg.isRead ? "Seen" : "Sent"} • ${_timeAgo(dt)}",
+            style: TextStyle(
+              color: msg.isRead ? Colors.blueAccent : Colors.grey,
+              fontSize: 10,
+              fontWeight: FontWeight.bold
+            ),
+          ),
+        ),
+      ],
+    );
+
+    // 🟢 Wrap with Selection Checkbox
+    if (_isSelectionMode) {
+      return GestureDetector(
+        onTap: () => _toggleSelection(msg.messageId),
+        child: Container(
+          color: Colors.transparent,
+          padding: const EdgeInsets.symmetric(vertical: 5),
+          child: Row(
+            children: [
+              Expanded(child: AbsorbPointer(child: messageContent)), // Disable inner interactions
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 15),
+                child: Icon(
+                  _selectedMessageIds.contains(msg.messageId) ? Icons.check_circle : Icons.radio_button_unchecked,
+                  color: _selectedMessageIds.contains(msg.messageId) ? Colors.blueAccent : Colors.grey,
+                  size: 24,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 400),
+      curve: Curves.easeInOutBack,
+      child: isDeleting ? const SizedBox(width: double.infinity, height: 0) : messageContent,
+    );
   }
 }
 
@@ -2161,10 +2583,13 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
     _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.message.text));
     await _videoController!.initialize();
     
+    if (!mounted) return; // 🟢 Fix: Prevent setState after dispose
+    
     _chewieController = ChewieController(
       videoPlayerController: _videoController!,
       autoPlay: true,
       looping: false,
+      showControls: true, // 🟢 Explicitly enable controls (Play/Pause, Time)
       aspectRatio: _videoController!.value.aspectRatio,
       materialProgressColors: ChewieProgressColors(
         playedColor: const Color(0xFF6A11CB),

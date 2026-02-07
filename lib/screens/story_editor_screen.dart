@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../services/cloudinary_service.dart';
@@ -23,7 +22,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   DateTime? _scheduledTime;
   
   // Overlays (Text/Stickers)
-  List<Map<String, dynamic>> _overlays = [];
+  final List<Map<String, dynamic>> _overlays = [];
 
   @override
   void initState() {
@@ -91,6 +90,12 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
   void _shareStory() async {
     setState(() => _isUploading = true);
     try {
+      // Append overlay text to description since we can't burn it into the image yet
+      String fullDescription = _captionController.text.trim();
+      if (_overlays.isNotEmpty) {
+        fullDescription += "\n\n[Overlays]: ${_overlays.map((o) => o['text']).join(", ")}";
+      }
+
       String? url = await CloudinaryService().uploadFile(
         widget.file, 
         isVideo: widget.type == 'video',
@@ -102,7 +107,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
         await DatabaseService().uploadStory(
           url, 
           widget.type, 
-          description: _captionController.text.trim(),
+          description: fullDescription,
           scheduledTime: _scheduledTime
         );
         if (mounted) Navigator.pop(context);
@@ -158,7 +163,7 @@ class _StoryEditorScreenState extends State<StoryEditorScreen> {
                 ),
               ),
             );
-          }).toList(),
+          }),
 
           // 3. Top Controls
           SafeArea(

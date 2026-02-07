@@ -1,44 +1,45 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart'; // 🟢 Added for Realtime DB
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_database/firebase_database.dart'; 
+// import 'package:firebase_messaging/firebase_messaging.dart'; // 🔴 Paused
 import 'screens/splash_screen.dart';
-import 'services/notification_service.dart';
+// import 'services/notification_service.dart'; // 🔴 Paused
 import 'package:flutter/services.dart'; 
 
-// 🟢 Background Handler
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
-  print("Background Message Received: ${message.messageId}");
-}
+// 🟢 1. Global Key (Notification se screen badalne ke liye zaroori hai)
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// 🟢 2. Background Handler
+// 🔴 Paused
+// @pragma('vm:entry-point')
+// Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+//   await Firebase.initializeApp();
+//   print("Background Message Received: ${message.messageId}");
+// }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   
-  // 1. Notification Setup
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  // 3. Notification Setup
+  // FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler); // 🔴 Paused
 
-  // 🟢 2. Firestore Offline Persistence (Already Optimized)
+  // 4. Firestore Offline Settings
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
   );
 
-  // 🟢 3. Realtime Database Offline Persistence (NEW ADDITION)
-  // Ye zaroori hai taaki chats offline mode mein bhi dikhein aur send hon
+  // 5. Realtime Database Persistence (Offline Chats)
   try {
     FirebaseDatabase.instance.setPersistenceEnabled(true);
-    // Optional: Cache size limit (100MB) taaki device storage full na ho
     FirebaseDatabase.instance.setPersistenceCacheSizeBytes(100 * 1024 * 1024); 
   } catch (e) {
-    // Agar web par run ho raha hai ya duplicate call hai to error ignore karein
     print("Realtime DB Persistence Warning: $e");
   }
 
-  // 🟢 4. Status Bar UI
+  // 6. Status Bar UI (Transparent)
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -55,13 +56,13 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  final NotificationService _notificationService = NotificationService();
+  // final NotificationService _notificationService = NotificationService(); // 🔴 Paused
 
   @override
   void initState() {
     super.initState();
-    // Notifications initialize karna
-    _notificationService.initNotifications();
+    // Notifications init
+    // _notificationService.initNotifications(); // 🔴 Paused
   }
 
   @override
@@ -70,21 +71,22 @@ class _MyAppState extends State<MyApp> {
       debugShowCheckedModeBanner: false,
       title: 'Swift Chat Premium',
       
-      // 🟢 PREMIUM THEME SETUP
+      // 🟢 Navigator Key Jod diya (Important)
+      navigatorKey: navigatorKey,
+
+      // PREMIUM THEME
       theme: ThemeData(
         brightness: Brightness.dark,
         primaryColor: const Color(0xFF6A11CB), 
         scaffoldBackgroundColor: const Color(0xFF121212),
         useMaterial3: true,
         
-        // Modern Color Scheme
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF6A11CB), 
           secondary: Color(0xFF2575FC), 
           surface: Color(0xFF1E1E1E),
         ),
 
-        // Stylish App Bar
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.transparent, 
           elevation: 0,
