@@ -1,4 +1,4 @@
-package com.example.swift_chat
+package com.hypernest.swiftchat
 
 import io.flutter.embedding.android.FlutterActivity
 
