@@ -1,7 +1,7 @@
 // 🟢 1. Plugins Block (Sabse Top par hona chahiye)
 plugins {
     // Android Application Plugin (Version match karna chahiye aapke setup se)
-    id("com.android.application") version "8.1.0" apply false
+    id("com.android.application") version "8.11.1" apply false
     
     // Kotlin Plugin
     id("org.jetbrains.kotlin.android") version "1.8.22" apply false
