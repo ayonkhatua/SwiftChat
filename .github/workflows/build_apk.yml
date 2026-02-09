@@ -1,0 +1,52 @@
+name: Build Android App
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Button to run manually
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # 1. Java 17 Setup (Android build ke liye zaroori)
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: 'gradle'
+
+    # 2. Flutter Setup (Latest Stable Version)
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: 'stable'
+        cache: true
+
+    # 3. Dependencies Download
+    - name: Get Dependencies
+      run: flutter pub get
+
+    # 4. Check for google-services.json (Crash rokne ke liye check)
+    - name: Check for Google Services JSON
+      run: |
+        if [ ! -f android/app/google-services.json ]; then
+          echo "⚠️ WARNING: google-services.json nahi mila! App Crash ho sakta hai."
+        else
+          echo "✅ Google Services JSON mil gaya."
+        fi
+
+    # 5. Build APK (Debug Mode - Logs check karne ke liye best)
+    - name: Build Debug APK
+      run: flutter build apk --debug
+
+    # 6. Upload APK to GitHub Artifacts
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: SwiftChat-Debug-APK
+        path: build/app/outputs/flutter-apk/app-debug.apk

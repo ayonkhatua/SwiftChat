@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "871359598363",
+    "firebase_url": "https://swift-chat-hyper-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "swift-chat-hyper",
+    "storage_bucket": "swift-chat-hyper.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:871359598363:android:80b96a7d5b47c17e164dbe",
+        "android_client_info": {
+          "package_name": "com.hypernest.swiftchat"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "871359598363-j0de5vck4sjhna614u1jblf1tl6u7sob.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.hypernest.swiftchat",
+            "certificate_hash": "9ef419c1008f64ccac66214cce5b7c06ef1c4a8e"
+          }
+        },
+        {
+          "client_id": "871359598363-a51hj8853vvghfodtkorks43uobtc0gg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDtSLJRZOrgR7nAgsGnDZi_uc0knL4KfPg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "871359598363-a51hj8853vvghfodtkorks43uobtc0gg.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
