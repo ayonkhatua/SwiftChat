@@ -178,7 +178,7 @@ class PremiumScreen extends StatelessWidget {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
-                    // Navigate to Wallet Screen for Payment with Plan Details
+                    // 🟢 Redirect to Wallet Screen (Payment Page) with Amount & Plan Name
                     Navigator.push(context, MaterialPageRoute(builder: (_) => WalletScreen(
                       amount: numericPrice,
                       planName: title,

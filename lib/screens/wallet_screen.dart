@@ -364,16 +364,23 @@ class _WalletScreenState extends State<WalletScreen> {
                     FutureBuilder<DataSnapshot>(
                       future: FirebaseDatabase.instance.ref('admin_settings/payment').get(),
                       builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const CircularProgressIndicator(color: Colors.purpleAccent);
-                        }
-                        if (snapshot.hasError || !snapshot.hasData || snapshot.data?.value == null) {
-                          return const Text("Could not load payment info.", style: TextStyle(color: Colors.redAccent));
-                        }
+                        // 🟢 Fix: Default UPI ID taaki QR hamesha show ho (agar DB empty bhi ho)
+                        String upiId = "admin@upi"; 
                         
-                        var data = snapshot.data!.value as Map<dynamic, dynamic>;
-                        String upiId = data['upi_id'] ?? "admin@upi"; // Fallback
+                        if (snapshot.hasData && snapshot.data!.value != null) {
+                          try {
+                            var data = snapshot.data!.value as Map<dynamic, dynamic>;
+                            upiId = data['upi_id'] ?? "admin@upi";
+                          } catch (e) {
+                            debugPrint("Error fetching UPI: $e");
+                          }
+                        }
+
                         String upiData = "upi://pay?pa=$upiId&pn=SwiftChat&am=$price&tn=$itemName";
+
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const SizedBox(height: 150, child: Center(child: CircularProgressIndicator(color: Colors.purpleAccent)));
+                        }
 
                         return Column(
                           children: [
