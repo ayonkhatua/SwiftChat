@@ -65,6 +65,7 @@ class PremiumScreen extends StatelessWidget {
                           context,
                           title: "Gold Membership",
                           price: "₹99 / month",
+                          numericPrice: 99,
                           color: const Color(0xFFFFD700),
                           icon: Icons.star,
                           features: [
@@ -83,6 +84,7 @@ class PremiumScreen extends StatelessWidget {
                           context,
                           title: "Ultimate Royal",
                           price: "₹599 / month",
+                          numericPrice: 599,
                           color: const Color(0xFF6A11CB),
                           icon: Icons.workspace_premium,
                           features: [
@@ -113,6 +115,7 @@ class PremiumScreen extends StatelessWidget {
   Widget _buildPlanCard(BuildContext context, {
     required String title, 
     required String price, 
+    required int numericPrice,
     required Color color, 
     required IconData icon, 
     required List<String> features, 
@@ -175,8 +178,11 @@ class PremiumScreen extends StatelessWidget {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
-                    // Navigate to Wallet Screen for Payment
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const WalletScreen()));
+                    // Navigate to Wallet Screen for Payment with Plan Details
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => WalletScreen(
+                      amount: numericPrice,
+                      planName: title,
+                    )));
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: isUltimate ? color : Colors.white.withOpacity(0.1),

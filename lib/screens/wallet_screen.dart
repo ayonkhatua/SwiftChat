@@ -2,12 +2,10 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-// 🟢 Firebase Storage Hata diya
+import 'package:firebase_database/firebase_database.dart'; // 🟢 Realtime DB
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:image_picker/image_picker.dart';
-import '../services/database_service.dart';
 import '../services/cloudinary_service.dart'; // 🟢 Cloudinary Service Import
 
 class WalletScreen extends StatefulWidget {
@@ -21,7 +19,8 @@ class WalletScreen extends StatefulWidget {
 }
 
 class _WalletScreenState extends State<WalletScreen> {
-  final DatabaseService _dbService = DatabaseService();
+  // 🟢 Firestore service ko seedhe Realtime DB reference se replace kiya
+  final DatabaseReference _walletRef = FirebaseDatabase.instance.ref('wallets/${FirebaseAuth.instance.currentUser?.uid}');
   
   @override
   void initState() {
@@ -60,16 +59,18 @@ class _WalletScreenState extends State<WalletScreen> {
                 padding: const EdgeInsets.all(20.0),
                 child: Column(
                   children: [
-                    // 💰 BALANCE CARD
-                    StreamBuilder<DocumentSnapshot>(
-                      stream: _dbService.getUserWallet(),
+                    // 💰 BALANCE CARD (Realtime DB se)
+                    StreamBuilder<DatabaseEvent>(
+                      stream: _walletRef.onValue,
                       builder: (context, snapshot) {
                         int totalCoins = 0;
                         int giftedCoins = 0;
-                        if (snapshot.hasData && snapshot.data!.exists) {
-                           var data = snapshot.data!.data() as Map<String, dynamic>;
-                           int purchasedCoins = data['purchasedCoins'] ?? 0;
-                           giftedCoins = data['giftedCoins'] ?? 0;
+                        if (snapshot.hasData && !snapshot.hasError && snapshot.data!.snapshot.value != null) {
+                           // Realtime DB se data Map<dynamic, dynamic> ke roop mein aata hai
+                           var data = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
+                           // 'as int' cast zaroori ho sakta hai agar data num (int/double) hai
+                           int purchasedCoins = (data['purchasedCoins'] ?? 0) as int;
+                           giftedCoins = (data['giftedCoins'] ?? 0) as int;
                            totalCoins = purchasedCoins + giftedCoins;
                         }
 
@@ -289,19 +290,32 @@ class _WalletScreenState extends State<WalletScreen> {
                         int amountToWithdraw = int.parse(amountController.text);
                         String upiId = upiController.text;
 
-                        WriteBatch batch = FirebaseFirestore.instance.batch();
+                        // 🟢 Realtime DB Transaction: Coins ko safely deduct karne ke liye
+                        DatabaseReference userWalletRef = FirebaseDatabase.instance.ref('wallets/${user.uid}');
+                        TransactionResult result = await userWalletRef.runTransaction((Object? mutableData) {
+                          if (mutableData == null) {
+                            return Transaction.abort();
+                          }
+                          Map<dynamic, dynamic> wallet = Map<dynamic, dynamic>.from(mutableData as Map);
+                          int currentGiftedCoins = (wallet['giftedCoins'] ?? 0) as int;
 
-                        DocumentReference requestRef = FirebaseFirestore.instance.collection('withdrawal_requests').doc();
-                        batch.set(requestRef, {'userId': user.uid, 'username': user.displayName ?? "Unknown", 'amount': amountToWithdraw, 'upiId': upiId, 'status': 'pending', 'timestamp': FieldValue.serverTimestamp()});
+                          if (currentGiftedCoins < amountToWithdraw) {
+                            // Abort if not enough coins
+                            return Transaction.abort();
+                          }
+                          wallet['giftedCoins'] = currentGiftedCoins - amountToWithdraw;
+                          return Transaction.success(wallet);
+                        });
 
-                        DocumentReference walletRef = FirebaseFirestore.instance.collection('wallets').doc(user.uid);
-                        batch.update(walletRef, {'giftedCoins': FieldValue.increment(-amountToWithdraw)});
+                        if (result.committed && context.mounted) {
+                          // Transaction safal hone par hi request create karein
+                          DatabaseReference requestRef = FirebaseDatabase.instance.ref('withdrawal_requests').push();
+                          await requestRef.set({'userId': user.uid, 'username': user.displayName ?? "Unknown", 'amount': amountToWithdraw, 'upiId': upiId, 'status': 'pending', 'timestamp': ServerValue.timestamp});
 
-                        await batch.commit();
-
-                        if (context.mounted) {
                           Navigator.pop(context);
                           _showSuccessDialog(context, message: "Withdrawal request sent! Admin will process it shortly. The amount has been deducted from your withdrawable balance.");
+                        } else {
+                           throw Exception("Failed to update wallet. Not enough coins or database error.");
                         }
 
                       } catch (e) {
@@ -345,15 +359,20 @@ class _WalletScreenState extends State<WalletScreen> {
                   children: [
                     Text("Pay ₹$price for $itemName", style: const TextStyle(color: Colors.white70)),
                     const SizedBox(height: 15),
-
-                    // 1. FETCH ADMIN UPI FROM FIRESTORE
-                    FutureBuilder<DocumentSnapshot>(
-                      future: FirebaseFirestore.instance.collection('admin_settings').doc('payment').get(),
+                    
+                    // 1. FETCH ADMIN UPI FROM REALTIME DB
+                    FutureBuilder<DataSnapshot>(
+                      future: FirebaseDatabase.instance.ref('admin_settings/payment').get(),
                       builder: (context, snapshot) {
-                        if (!snapshot.hasData) return const CircularProgressIndicator(color: Colors.purpleAccent);
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const CircularProgressIndicator(color: Colors.purpleAccent);
+                        }
+                        if (snapshot.hasError || !snapshot.hasData || snapshot.data?.value == null) {
+                          return const Text("Could not load payment info.", style: TextStyle(color: Colors.redAccent));
+                        }
                         
-                        // Default fallback
-                        String upiId = (snapshot.data!.data() as Map<String, dynamic>?)?['upi_id'] ?? "admin@upi";
+                        var data = snapshot.data!.value as Map<dynamic, dynamic>;
+                        String upiId = data['upi_id'] ?? "admin@upi"; // Fallback
                         String upiData = "upi://pay?pa=$upiId&pn=SwiftChat&am=$price&tn=$itemName";
 
                         return Column(
@@ -450,15 +469,16 @@ class _WalletScreenState extends State<WalletScreen> {
                         throw Exception("Image upload failed");
                       }
 
-                      // B. Create Request in Firestore for Admin
-                      await FirebaseFirestore.instance.collection('payment_requests').add({
+                      // B. Create Request in Realtime DB for Admin
+                      DatabaseReference newRequestRef = FirebaseDatabase.instance.ref('payment_requests').push();
+                      await newRequestRef.set({
                         'userId': user.uid,
                         'username': user.displayName ?? "Unknown",
                         'amount': price,
                         'itemName': itemName,
                         'screenshotUrl': downloadUrl, // Cloudinary URL
-                        'status': 'pending', // Pending -> Approved
-                        'timestamp': FieldValue.serverTimestamp(),
+                        'status': 'pending',
+                        'timestamp': ServerValue.timestamp, // Realtime DB equivalent
                       });
 
                       if(context.mounted) {

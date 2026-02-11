@@ -44,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   // 🟢 VARIABLES
   final TextEditingController _messageController = TextEditingController();
   final DatabaseService _dbService = DatabaseService();
+  final CloudinaryService _cloudinaryService = CloudinaryService(); // 🟢 Cloudinary Instance
   final ScrollController _scrollController = ScrollController();
   bool _showScrollToBottomBtn = false;
   
@@ -875,7 +876,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final StreamController<double> progressController = StreamController<double>();
     _showUploadProgressDialog(progressController);
 
-    String? url = await CloudinaryService().uploadFile(
+    String? url = await _cloudinaryService.uploadFile(
       file, type: 'video', // 🟢 Audio treated as video for Cloudinary
       onProgress: (count, total) => progressController.add(count / total),
     );
@@ -1072,7 +1073,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final StreamController<double> progressController = StreamController<double>();
     _showUploadProgressDialog(progressController);
 
-    String? url = await CloudinaryService().uploadFile(
+    String? url = await _cloudinaryService.uploadFile(
       file, type: 'image',
       onProgress: (count, total) => progressController.add(count / total),
     );
@@ -1122,7 +1123,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final StreamController<double> progressController = StreamController<double>();
     _showUploadProgressDialog(progressController);
 
-    String? url = await CloudinaryService().uploadFile(
+    String? url = await _cloudinaryService.uploadFile(
       file, type: 'video',
       onProgress: (count, total) => progressController.add(count / total),
     );
@@ -1157,7 +1158,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final StreamController<double> progressController = StreamController<double>();
     _showUploadProgressDialog(progressController);
 
-    String? url = await CloudinaryService().uploadFile(
+    String? url = await _cloudinaryService.uploadFile(
       file, type: 'raw', // 🟢 Fix: Upload documents as Raw
       onProgress: (count, total) => progressController.add(count / total),
     );

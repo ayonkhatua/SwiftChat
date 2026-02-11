@@ -644,18 +644,93 @@ class SearchPage extends StatefulWidget {
 
 class _SearchPageState extends State<SearchPage> {
   final TextEditingController _searchController = TextEditingController();
-  QuerySnapshot? _searchResults;
+  List<Map<String, dynamic>> _searchResults = []; // 🟢 Changed to List for RTDB
   final DatabaseService _dbService = DatabaseService();
+  final DatabaseReference _rtdb = FirebaseDatabase.instance.ref(); // 🟢 Realtime DB Ref
+  final String currentUserId = FirebaseAuth.instance.currentUser!.uid;
   bool _isLoading = false;
 
   void _performSearch() async {
     if (_searchController.text.isEmpty) return;
     setState(() => _isLoading = true);
-    var res = await _dbService.searchUsersByName(_searchController.text.trim());
-    setState(() {
-      _searchResults = res;
-      _isLoading = false;
+    
+    // 🟢 Realtime Database Search
+    String query = _searchController.text.trim();
+    DataSnapshot snapshot = await _rtdb.child('users')
+        .orderByChild('username')
+        .startAt(query)
+        .endAt("$query\uf8ff")
+        .get();
+
+    List<Map<String, dynamic>> results = [];
+    if (snapshot.value != null) {
+      Map<dynamic, dynamic> values = snapshot.value as Map<dynamic, dynamic>;
+      values.forEach((key, value) {
+        if (key != currentUserId) {
+          var user = Map<String, dynamic>.from(value as Map);
+          user['uid'] = key;
+          results.add(user);
+        }
+      });
+    }
+
+    if (mounted) {
+      setState(() {
+        _searchResults = results;
+        _isLoading = false;
+      });
+    }
+  }
+
+  // 🟢 Helper: Send Friend Request (RTDB)
+  void _sendFriendRequest(String targetUid, String targetName, String? targetPic) async {
+    User? me = FirebaseAuth.instance.currentUser;
+    await _rtdb.child('friend_requests/$targetUid/$currentUserId').set({
+      'username': me?.displayName ?? "Unknown",
+      'profile_pic': me?.photoURL,
+      'status': 'pending',
+      'timestamp': ServerValue.timestamp,
     });
+    setState(() {}); // Refresh UI
+  }
+
+  // 🟢 Helper: Accept Friend Request (RTDB -> Firestore Chat)
+  void _acceptFriendRequest(String senderUid, String senderName, String? senderPic) async {
+    User? me = FirebaseAuth.instance.currentUser;
+    
+    // 1. Remove Request from RTDB
+    await _rtdb.child('friend_requests/$currentUserId/$senderUid').remove();
+
+    // 2. Add to Friends in RTDB (Optional but good for record)
+    await _rtdb.child('friends/$currentUserId/$senderUid').set(true);
+    await _rtdb.child('friends/$senderUid/$currentUserId').set(true);
+
+    // 3. 🟢 Create Chat in Firestore (Taaki Chat Bar me dikhe)
+    String chatId = currentUserId.compareTo(senderUid) < 0 
+        ? "${currentUserId}_$senderUid" 
+        : "${senderUid}_$currentUserId";
+
+    await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
+      'isGroup': false,
+      'users': {
+        currentUserId: me?.displayName ?? "Me",
+        senderUid: senderName
+      },
+      'participants': [currentUserId, senderUid],
+      'lastMessage': "You are now friends! 👋",
+      'lastMessageTime': FieldValue.serverTimestamp(),
+      'recentUpdated': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("You are now friends with $senderName! Check Chat tab.")));
+    }
+  }
+
+  // 🟢 Helper: Reject Request
+  void _rejectFriendRequest(String senderUid) async {
+    await _rtdb.child('friend_requests/$currentUserId/$senderUid').remove();
+    if (mounted) setState(() {});
   }
 
   @override
@@ -686,21 +761,26 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Widget _buildSearchResults() {
-    if (_searchResults == null || _searchResults!.docs.isEmpty) {
+    if (_searchResults.isEmpty) {
       return const Center(child: Text("No users found", style: TextStyle(color: Colors.white54)));
     }
 
     return ListView.builder(
-                  itemCount: _searchResults!.docs.length,
+                  itemCount: _searchResults.length,
                   itemBuilder: (context, index) {
-                    var data = _searchResults!.docs[index].data() as Map<String, dynamic>;
-                    String uid = _searchResults!.docs[index].id;
+                    var data = _searchResults[index];
+                    String uid = data['uid'];
                     String name = data['username'] ?? "Unknown";
                     String email = data['email'] ?? "";
                     String? photoUrl = data['profile_pic'];
-                    int membershipLevel = data['membershipLevel'] ?? 0;
+                    
+                    // 🟢 Map RTDB Premium Plan to Level
+                    String plan = data['premiumPlan'] ?? 'none';
+                    int membershipLevel = 0;
+                    if (plan == 'gold') membershipLevel = 1;
+                    if (plan == 'ultimate') membershipLevel = 2;
 
-                    if (uid == FirebaseAuth.instance.currentUser!.uid) return const SizedBox(); 
+                    if (uid == currentUserId) return const SizedBox(); 
 
                     return ListTile(
                       leading: GestureDetector(
@@ -723,34 +803,39 @@ class _SearchPageState extends State<SearchPage> {
                       title: VIPNameWidget(name: name, level: membershipLevel),
                       
                       subtitle: Text(email, style: const TextStyle(color: Colors.grey)),
-                      trailing: StreamBuilder<String>(
-                        stream: _dbService.getFriendshipStatus(uid),
+                      
+                      // 🟢 Realtime Friendship Status Check
+                      trailing: StreamBuilder<DatabaseEvent>(
+                        stream: _rtdb.child('friend_requests/$uid/$currentUserId').onValue, // Check if I sent request
                         builder: (context, snapshot) {
-                          if (!snapshot.hasData) return const SizedBox();
-                          String status = snapshot.data!;
-                          if (status == "friends") {
-                            return IconButton(icon: const Icon(Icons.chat_bubble, color: Color(0xFF6A11CB)), onPressed: () {
-                                Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(receiverId: uid, receiverName: name)));
-                            });
-                          }
-                          if (status == "request_sent") {
+                          if (snapshot.hasData && snapshot.data!.snapshot.value != null) {
+                            // Request Sent
                             return ElevatedButton(
                               style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[800], foregroundColor: Colors.white),
-                              onPressed: () => _dbService.cancelFriendRequest(uid),
+                              onPressed: () => _rejectFriendRequest(uid), // Cancel logic same as reject for sender
                               child: const Text("Cancel"),
                             );
                           }
-                          if (status == "request_received") {
-                             return ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                              onPressed: () => _dbService.acceptFriendRequest(uid),
-                              child: const Text("Accept"),
-                            );
-                          }
-                          return ElevatedButton(
-                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6A11CB)),
-                            onPressed: () => _dbService.sendFriendRequest(uid),
-                            child: const Text("Add", style: TextStyle(color: Colors.white)),
+                          
+                          // Check if they are already friends (Simple check via Chat existence or Friends node)
+                          // For simplicity in search, we show "Add" if no pending request.
+                          // A more robust check would query 'friends' node too.
+                          
+                          return StreamBuilder<DatabaseEvent>(
+                            stream: _rtdb.child('friends/$currentUserId/$uid').onValue,
+                            builder: (context, friendSnap) {
+                              if (friendSnap.hasData && friendSnap.data!.snapshot.value != null) {
+                                return IconButton(icon: const Icon(Icons.chat_bubble, color: Color(0xFF6A11CB)), onPressed: () {
+                                    Navigator.push(context, MaterialPageRoute(builder: (_) => ChatScreen(receiverId: uid, receiverName: name)));
+                                });
+                              }
+                              
+                              return ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6A11CB)),
+                                onPressed: () => _sendFriendRequest(uid, name, photoUrl),
+                                child: const Text("Add", style: TextStyle(color: Colors.white)),
+                              );
+                            }
                           );
                         },
                       ),
@@ -764,11 +849,14 @@ class _SearchPageState extends State<SearchPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 🟢 1. FRIEND REQUESTS SECTION
-          StreamBuilder<QuerySnapshot>(
-            stream: _dbService.getIncomingFriendRequests(),
+          // 🟢 1. FRIEND REQUESTS SECTION (Realtime DB)
+          StreamBuilder<DatabaseEvent>(
+            stream: _rtdb.child('friend_requests/$currentUserId').onValue,
             builder: (context, snapshot) {
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const SizedBox();
+              if (!snapshot.hasData || snapshot.data!.snapshot.value == null) return const SizedBox();
+              
+              Map<dynamic, dynamic> requests = snapshot.data!.snapshot.value as Map<dynamic, dynamic>;
+              List<MapEntry<dynamic, dynamic>> requestList = requests.entries.toList();
               
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -780,26 +868,32 @@ class _SearchPageState extends State<SearchPage> {
                   ListView.builder(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    itemCount: snapshot.data!.docs.length,
+                    itemCount: requestList.length,
                     itemBuilder: (context, index) {
-                      String senderId = snapshot.data!.docs[index].id;
-                      return FutureBuilder<DocumentSnapshot>(
-                        future: FirebaseFirestore.instance.collection('users').doc(senderId).get(),
-                        builder: (context, userSnap) {
-                          if (!userSnap.hasData) return const SizedBox();
-                          var userData = userSnap.data!.data() as Map<String, dynamic>;
-                          return ListTile(
-                            leading: CircleAvatar(backgroundImage: CachedNetworkImageProvider(userData['profile_pic'] ?? "")),
-                            title: Text(userData['username'], style: const TextStyle(color: Colors.white)),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(icon: const Icon(Icons.check_circle, color: Colors.green, size: 30), onPressed: () => _dbService.acceptFriendRequest(senderId)),
-                                IconButton(icon: const Icon(Icons.cancel, color: Colors.red, size: 30), onPressed: () => _dbService.rejectFriendRequest(senderId)),
-                              ],
+                      String senderId = requestList[index].key;
+                      var reqData = requestList[index].value;
+                      String name = reqData['username'] ?? "Unknown";
+                      String? pic = reqData['profile_pic'];
+
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage: pic != null ? CachedNetworkImageProvider(pic) : null,
+                          child: pic == null ? const Icon(Icons.person) : null,
+                        ),
+                        title: Text(name, style: const TextStyle(color: Colors.white)),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.check_circle, color: Colors.green, size: 30), 
+                              onPressed: () => _acceptFriendRequest(senderId, name, pic)
                             ),
-                          );
-                        }
+                            IconButton(
+                              icon: const Icon(Icons.cancel, color: Colors.red, size: 30), 
+                              onPressed: () => _rejectFriendRequest(senderId)
+                            ),
+                          ],
+                        ),
                       );
                     },
                   ),
